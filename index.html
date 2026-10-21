@@ -1,0 +1,825 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Raid Log Breakdown</title>
+<style>
+:root{
+  --bg:#0d0f14; --panel:#151821; --panel2:#1b1f2a; --line:#262b38; --text:#e8eaf0; --muted:#8a90a2;
+  --accent:#7c66ff; --accent-soft:rgba(124,102,255,.14); --kill:#3fbf7f; --wipe:#e0565b; --inc:#d9a441;
+  --radius:10px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+button{font:inherit;color:inherit}
+.muted{color:var(--muted)}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+
+/* Top bar */
+.topbar{position:sticky;top:0;z-index:30;height:54px;display:flex;align-items:center;gap:12px;padding:0 16px;background:rgba(13,15,20,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:.2px;white-space:nowrap}
+.brand-mark{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,#7c66ff,#3fb6ff);display:grid;place-items:center;font-size:14px}
+.filechip{color:var(--muted);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.spacer{flex:1}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);cursor:pointer;font-size:13px;white-space:nowrap}
+.btn:hover{border-color:#3a4152}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover{filter:brightness(1.08)}
+.btn[aria-disabled="true"]{opacity:.35;pointer-events:none}
+.icon-btn{display:none;background:none;border:0;padding:6px;cursor:pointer;line-height:0;color:var(--text)}
+body:not(.loaded) .app-only{display:none!important}
+
+/* Landing */
+.landing{max-width:720px;margin:48px auto;padding:0 16px}
+body.loaded .landing{display:none}
+.landing h1{font-size:30px;margin:0 0 6px}
+.landing p.lead{color:var(--muted);margin:0 0 24px}
+.drop{border:2px dashed #343b4d;border-radius:14px;padding:40px 20px;text-align:center;background:var(--panel);transition:.15s}
+.drop.hover,.drop:hover{border-color:var(--accent);background:var(--accent-soft)}
+.drop{display:block;cursor:pointer}
+.drop-icon{color:var(--accent);display:flex;justify-content:center}
+.drop .big{font-size:18px;font-weight:600;margin:8px 0 4px}
+.opts{display:flex;flex-wrap:wrap;gap:18px;margin:18px 0 0;padding:14px 16px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius)}
+.opts label{display:flex;align-items:center;gap:8px;font-size:13px}
+.opts input[type=number]{width:64px;padding:5px 7px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
+.help{margin-top:22px;font-size:13px;color:var(--muted)}
+.help code{background:var(--panel2);padding:1px 5px;border-radius:4px;color:var(--text)}
+.help li{margin:4px 0}
+.progress{display:none;margin-top:18px}
+.progress.on{display:block}
+.ptrack{height:8px;border-radius:99px;background:var(--panel2);overflow:hidden}
+.ptrack span{display:block;height:100%;width:0;background:linear-gradient(90deg,#7c66ff,#3fb6ff);transition:width .15s}
+.ptext{margin-top:8px;font-size:13px;color:var(--muted)}
+.error{margin-top:14px;color:#ff8a8f;font-size:13px}
+
+/* App layout */
+.app{display:none}
+body.loaded .app{display:grid;grid-template-columns:260px minmax(0,1fr);min-height:calc(100vh - 54px)}
+.sidebar{border-right:1px solid var(--line);background:var(--panel);position:sticky;top:54px;height:calc(100vh - 54px);overflow-y:auto;padding:12px 10px 40px}
+.navlabel{font-size:11px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);padding:14px 10px 6px}
+.nav{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;font-size:13.5px;color:#cfd3dd}
+.nav:hover{background:var(--panel2)}
+.nav.active{background:var(--accent-soft);color:#fff;box-shadow:inset 2px 0 0 var(--accent)}
+.nav .nb{color:var(--muted);font-size:12px;min-width:22px;font-variant-numeric:tabular-nums}
+.nav .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nav .count{color:var(--muted);font-size:12px}
+.tag{font-size:10.5px;font-weight:700;padding:1px 6px;border-radius:5px;letter-spacing:.3px}
+.tag.Kill{background:rgba(63,191,127,.15);color:var(--kill)}
+.tag.Wipe{background:rgba(224,86,91,.15);color:var(--wipe)}
+.tag.Incomplete{background:rgba(217,164,65,.15);color:var(--inc)}
+.main{padding:22px 28px 60px;min-width:0}
+
+/* Headers */
+.kicker{font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted)}
+.titlerow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:2px 0 2px}
+.titlerow h1{font-size:26px;margin:0}
+.titlerow .tag{font-size:12px;padding:2px 8px}
+.sub{color:var(--muted);font-size:13.5px}
+.headrow{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.pn{display:flex;gap:6px}
+.toolbar{position:sticky;top:54px;z-index:10;display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 0;margin-bottom:6px;background:var(--bg)}
+.toolbar[hidden]{display:none}
+.segbtns{display:inline-flex;background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:3px}
+.segbtns button{border:0;background:none;padding:6px 14px;border-radius:7px;cursor:pointer;font-size:13px;color:var(--muted)}
+.segbtns button.on{background:var(--accent);color:#fff}
+.toolbar input{flex:1;min-width:140px;max-width:260px;padding:7px 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--text)}
+.kbd{font-size:11.5px;color:var(--muted);margin-left:auto}
+.kbd b{border:1px solid var(--line);border-radius:4px;padding:0 5px;font-weight:500}
+
+/* Cards & tables */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin:6px 0 22px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px}
+.card .k{font-size:12px;color:var(--muted)}
+.card .v{font-size:20px;font-weight:650;margin-top:2px;font-variant-numeric:tabular-nums}
+.card .s{font-size:12px;color:var(--muted)}
+h2{font-size:16px;margin:26px 0 10px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+table{width:100%;border-collapse:collapse}
+th{font-size:11.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600;text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);background:var(--panel2);white-space:nowrap}
+td{padding:8px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+tbody tr:last-child td{border-bottom:0}
+tr[data-href],tr.row{cursor:pointer}
+tr[data-href]:hover td,tr.row:hover td{background:rgba(255,255,255,.025)}
+tr.row.open td{background:var(--accent-soft)}
+.c-rank{width:42px;color:var(--muted);font-variant-numeric:tabular-nums}
+.c-name{font-weight:600}
+.c-name .caret{display:inline-block;width:0;height:0;margin:0 9px 1px 1px;border-left:5px solid var(--muted);border-top:4px solid transparent;border-bottom:4px solid transparent;transition:transform .12s}
+tr.open .caret{transform:rotate(90deg)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;vertical-align:1px}
+.c-rate{width:38%;min-width:180px}
+.ratecell{display:flex;align-items:center;gap:10px}
+.track{flex:1;height:10px;border-radius:99px;background:#232836;overflow:hidden}
+.track span{display:block;height:100%;border-radius:99px;opacity:.9}
+.ratecell b{min-width:70px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+.abil-row>td{padding:0 12px 12px 54px;background:rgba(124,102,255,.05);white-space:normal}
+.abil{margin-top:4px;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.abil th{background:transparent;font-size:10.5px;padding:7px 10px}
+.abil td{padding:6px 10px;font-size:13px}
+.abil .track{height:6px}
+.summaryline{font-size:13px;color:var(--muted);margin:2px 0 10px}
+.empty{padding:40px;text-align:center;color:var(--muted);background:var(--panel);border:1px solid var(--line);border-radius:var(--radius)}
+.tops{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+.tops .card h3{margin:0 0 8px;font-size:14px;display:flex;justify-content:space-between;align-items:center}
+.tops .card h3 a{font-size:12px;color:var(--accent);font-weight:500}
+.mini{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.mini ol{margin:0;padding:0;list-style:none}
+.mini li{display:flex;justify-content:space-between;gap:6px;font-size:13px;padding:3px 0}
+.mini li span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mini .lbl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px}
+.scroll{overflow-x:auto}
+.dropzone-overlay{position:fixed;inset:0;z-index:100;display:none;place-items:center;background:rgba(13,15,20,.85);border:3px dashed var(--accent);font-size:20px;font-weight:600}
+body.dragging .dropzone-overlay{display:grid}
+
+/* Mobile */
+@media (max-width:860px){
+  .icon-btn{display:block}
+  body.loaded .app{grid-template-columns:1fr}
+  .sidebar{position:fixed;left:0;top:54px;bottom:0;width:280px;z-index:40;transform:translateX(-100%);transition:transform .2s;box-shadow:0 0 40px rgba(0,0,0,.5)}
+  body.nav-open .sidebar{transform:none}
+  .main{padding:16px 16px 60px}
+  .hide-sm{display:none}
+  .c-rate{width:auto;min-width:130px}
+  .ratecell b{min-width:54px}
+  .abil-row>td{padding-left:12px}
+  .kbd,.filechip{display:none}
+  .mini{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <button class="icon-btn app-only" id="navToggle" aria-label="Menu"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+  <a class="brand" href="#/overview"><span class="brand-mark"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 17.5 3 6V3h3l11.5 11.5"/><path d="m13 19 6-6"/><path d="m16 16 4 4"/><path d="m19 21 2-2"/></svg></span>Raid Log Breakdown</a>
+  <span class="filechip app-only" id="fileChip"></span>
+  <span class="spacer"></span>
+  <label class="btn primary app-only">Open another log<input type="file" id="fileInput2" accept=".txt,.log" hidden></label>
+</header>
+
+<section class="landing">
+  <h1>Upload a combat log</h1>
+  <p class="lead">Get boss-by-boss, trash and overall DPS and healing rankings. Your log is read in your browser and never uploaded anywhere.</p>
+  <label class="drop" id="drop">
+    <div class="drop-icon"><svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 18v-6"/><path d="m9 15 3-3 3 3"/></svg></div>
+    <div class="big">Drop WoWCombatLog.txt here</div>
+    <div class="muted">or click to choose a file</div>
+    <input type="file" id="fileInput" accept=".txt,.log" hidden>
+  </label>
+  <div class="opts">
+    <label><input type="checkbox" id="optPets" checked> Count pet damage toward owner</label>
+    <label>New trash pull after <input type="number" id="optGap" value="10" min="1" max="120"> sec without damage</label>
+  </div>
+  <div class="progress" id="progress">
+    <div class="ptrack"><span id="pbar"></span></div>
+    <div class="ptext" id="ptext">Reading&#x2026;</div>
+  </div>
+  <div class="error" id="error"></div>
+  <div class="help">
+    <strong style="color:var(--text)">Getting a log</strong>
+    <ul>
+      <li>Turn on <em>Advanced Combat Logging</em> (System &gt; Network) and type <code>/combatlog</code> before the raid.</li>
+      <li>The file is in <code>World of Warcraft/_classic_era_/Logs/WoWCombatLog.txt</code> (or the folder for your version).</li>
+      <li>Boss fights come from encounter start/end markers. Everything else is trash, split into pulls by gaps in combat.</li>
+    </ul>
+  </div>
+</section>
+
+<div class="app">
+  <nav class="sidebar" id="sidebar"></nav>
+  <main class="main" id="main">
+    <div id="head"></div>
+    <div class="toolbar" id="toolbar" hidden>
+      <div class="segbtns">
+        <button data-metric="damage">Damage</button>
+        <button data-metric="healing">Healing</button>
+      </div>
+      <input type="search" id="filter" placeholder="Filter players&#x2026;">
+      <button class="btn" id="exportBtn">Export CSV</button>
+      <span class="kbd"><b>[</b> <b>]</b> prev/next &#xb7; <b>D</b>/<b>H</b> damage/healing</span>
+    </div>
+    <div id="content"></div>
+  </main>
+</div>
+
+<div class="dropzone-overlay">Drop the combat log to load it</div>
+
+<!-- ================= Parser (runs in a Web Worker) ================= -->
+<script type="text/worker" id="worker-src">
+const DAMAGE = new Set(['SWING_DAMAGE','SPELL_DAMAGE','SPELL_PERIODIC_DAMAGE','RANGE_DAMAGE','DAMAGE_SHIELD','DAMAGE_SPLIT']);
+const HEAL = new Set(['SPELL_HEAL','SPELL_PERIODIC_HEAL']);
+const OTHER = new Set(['ENCOUNTER_START','ENCOUNTER_END','SPELL_SUMMON','SPELL_ABSORBED','SPELL_CAST_SUCCESS']);
+
+const CLASS_SPELLS = (() => {
+  const by = {
+    Warrior:['Heroic Strike','Bloodthirst','Mortal Strike','Whirlwind','Execute','Cleave','Revenge','Shield Slam','Sunder Armor','Overpower','Slam','Hamstring','Battle Shout','Demoralizing Shout','Bloodrage','Thunder Clap','Shield Block','Rend','Deep Wounds','Pummel','Shield Bash'],
+    Rogue:['Sinister Strike','Backstab','Eviscerate','Hemorrhage','Slice and Dice','Kick','Ambush','Rupture','Expose Armor','Blade Flurry','Adrenaline Rush','Garrote','Mutilate','Instant Poison','Deadly Poison'],
+    Mage:['Frostbolt','Fireball','Arcane Missiles','Scorch','Arcane Explosion','Blizzard','Fire Blast','Cone of Cold','Pyroblast','Frost Nova','Arcane Intellect','Arcane Brilliance','Ignite','Evocation','Ice Block'],
+    Hunter:['Auto Shot','Aimed Shot','Multi-Shot','Arcane Shot','Serpent Sting',"Hunter's Mark",'Raptor Strike','Steady Shot','Volley','Tranquilizing Shot','Rapid Fire','Feign Death'],
+    Warlock:['Shadow Bolt','Corruption','Immolate','Searing Pain','Curse of Agony','Curse of the Elements','Curse of Shadow','Curse of Recklessness','Life Tap','Drain Life','Hellfire','Rain of Fire','Soul Fire','Shadowburn','Conflagrate','Siphon Life'],
+    Priest:['Flash Heal','Greater Heal','Prayer of Healing','Renew','Mind Blast','Mind Flay','Power Word: Shield','Heal','Lesser Heal','Power Word: Fortitude','Prayer of Fortitude','Shadow Word: Pain','Holy Fire','Smite','Inner Fire','Shadowform','Vampiric Embrace','Fade'],
+    Druid:['Rejuvenation','Regrowth','Healing Touch','Moonfire','Starfire','Wrath','Maul','Swipe','Shred','Claw','Rake','Ferocious Bite','Mark of the Wild','Gift of the Wild','Innervate','Insect Swarm','Faerie Fire','Faerie Fire (Feral)','Rip','Swiftmend','Tranquility'],
+    Paladin:['Holy Light','Flash of Light','Holy Shock','Seal of Command','Judgement','Judgement of Command','Judgement of Righteousness','Consecration','Crusader Strike','Seal of Righteousness','Blessing of Might','Blessing of Wisdom','Blessing of Kings','Blessing of Salvation','Greater Blessing of Might','Greater Blessing of Wisdom','Greater Blessing of Kings','Greater Blessing of Salvation','Cleanse','Holy Shield','Seal of Wisdom','Seal of Light','Seal of the Crusader','Exorcism','Hammer of Wrath'],
+    Shaman:['Chain Heal','Lesser Healing Wave','Healing Wave','Lightning Bolt','Chain Lightning','Earth Shock','Frost Shock','Flame Shock','Stormstrike','Windfury Totem','Mana Spring Totem','Strength of Earth Totem','Grace of Air Totem','Tranquil Air Totem','Lightning Shield','Mana Tide Totem']
+  };
+  const map = {};
+  for (const cls in by) by[cls].forEach(s => map[s] = cls);
+  return map;
+})();
+
+function isPlayer(g){ return typeof g === 'string' && g.startsWith('Player-'); }
+function num(v){ const n = Number(v); return Number.isFinite(n) ? n : 0; }
+function clean(n){ n = String(n || 'Unknown'); const i = n.indexOf('-'); return i > 0 ? n.slice(0, i) : n; }
+
+function splitCsv(s){
+  const out = []; let i = 0; const n = s.length;
+  while (i <= n) {
+    if (s.charCodeAt(i) === 34) {
+      let j = i + 1, val = '';
+      for (;;) {
+        const q = s.indexOf('"', j);
+        if (q < 0) { val += s.slice(j); i = n; break; }
+        if (s.charCodeAt(q + 1) === 34) { val += s.slice(j, q + 1); j = q + 2; continue; }
+        val += s.slice(j, q); i = q + 1; break;
+      }
+      out.push(val);
+      const c = s.indexOf(',', i); if (c < 0) break; i = c + 1;
+    } else {
+      const c = s.indexOf(',', i);
+      if (c < 0) { out.push(s.slice(i)); break; }
+      out.push(s.slice(i, c)); i = c + 1;
+    }
+  }
+  return out;
+}
+
+const TS = /^(\d+)\/(\d+)(?:\/(\d+))?\s+(\d+):(\d+):(\d+)\.(\d+)/;
+function parseTs(s){
+  const m = TS.exec(s); if (!m) return null;
+  let y = m[3] ? Number(m[3]) : 2000; if (y < 100) y += 2000;
+  return Date.UTC(y, Number(m[1]) - 1, Number(m[2]), Number(m[4]), Number(m[5]), Number(m[6]), Number((m[7] + '00').slice(0, 3)));
+}
+
+// Some log versions add a "baseAmount" field after amount. Detect it from the data
+// instead of hardcoding: without it, the field before amount is the unit level (small number).
+function makeLayout(){ return {seen:0, votes:0, mode:null}; }
+function amountIndex(L, f, end, offset){
+  let hasBase;
+  if (L.mode === null) {
+    hasBase = num(f[end - offset - 1]) > 70;
+    L.seen++; if (hasBase) L.votes++;
+    if (L.seen >= 1000) L.mode = L.votes / L.seen > 0.15;
+  } else hasBase = L.mode;
+  return end - offset - (hasBase ? 1 : 0);
+}
+
+function newBucket(){ return {damage:{}, healing:{}}; }
+
+function createParser(opts){
+  const mergePets = opts.mergePets !== false;
+  const gapMs = opts.gapMs || 10000;
+  const encounters = [], pulls = [];
+  const bosses = newBucket(), trash = newBucket(), overall = newBucket();
+  const petOwners = {}, playerNames = {}, classVotes = {};
+  const layDmg = makeLayout(), layHeal = makeLayout();
+  let current = null, pull = null, fightN = 0, pullN = 0, lines = 0, first = null, last = null;
+
+  function closeEncounter(end, result){
+    current.end = end; current.result = result;
+    current.duration = Math.max(0.001, (end - current.start) / 1000);
+    delete current.lastEvent;
+    encounters.push(current); current = null;
+  }
+  function closePull(){
+    if (!pull) return;
+    pull.end = pull.lastEvent;
+    pull.duration = Math.max(1, (pull.end - pull.start) / 1000);
+    delete pull.lastEvent;
+    pulls.push(pull); pull = null;
+  }
+  function vote(name, spell){
+    const cls = CLASS_SPELLS[spell]; if (!cls) return;
+    const v = classVotes[name] || (classVotes[name] = {});
+    v[cls] = (v[cls] || 0) + 1;
+  }
+  function addDamage(b, h){
+    const p = b.damage[h.name] || (b.damage[h.name] = {total:0, hits:0, crits:0, pet:0, abil:{}});
+    p.total += h.amount; p.hits++; if (h.crit) p.crits++; if (h.isPet) p.pet += h.amount;
+    const a = p.abil[h.ability] || (p.abil[h.ability] = {t:0, h:0, c:0});
+    a.t += h.amount; a.h++; if (h.crit) a.c++;
+  }
+  function addHeal(b, h){
+    const p = b.healing[h.name] || (b.healing[h.name] = {eff:0, raw:0, over:0, hits:0, crits:0, abil:{}});
+    p.eff += h.eff; p.raw += h.raw; p.over += h.over; p.hits++; if (h.crit) p.crits++;
+    const a = p.abil[h.ability] || (p.abil[h.ability] = {e:0, r:0, o:0, h:0, c:0});
+    a.e += h.eff; a.r += h.raw; a.o += h.over; a.h++; if (h.crit) a.c++;
+  }
+  function routeHeal(h, ts){
+    if (current) { addHeal(current, h); addHeal(bosses, h); addHeal(overall, h); }
+    else if (pull && ts - pull.lastEvent <= gapMs) { addHeal(pull, h); addHeal(trash, h); addHeal(overall, h); }
+    // heals outside combat (topping off between pulls) are ignored
+  }
+  function ownerOf(guid, f, prefix){
+    let o = petOwners[guid];
+    if (!o) {
+      const og = f[prefix + 1]; // advanced logging: ownerGUID
+      if (isPlayer(og) && playerNames[og]) { o = playerNames[og]; petOwners[guid] = o; }
+    }
+    return o;
+  }
+
+  function onDamage(ev, f, ts){
+    if (isPlayer(f[5])) return; // ignore damage to players (duels, mind control, self-damage)
+    const isSwing = ev === 'SWING_DAMAGE';
+    const prefix = isSwing ? 9 : 12;
+    let end = f.length; if (f[end - 1] === 'ST' || f[end - 1] === 'AOE') end--;
+    const amount = num(f[amountIndex(layDmg, f, end, 10)]);
+    if (amount <= 0) return;
+    let name = clean(f[2]), isPet = false;
+    if (!isPlayer(f[1])) {
+      const owner = ownerOf(f[1], f, prefix);
+      if (!owner) return;
+      isPet = true;
+      name = mergePets ? owner : `${name} (${owner})`;
+    } else if (!isSwing) vote(name, f[10]);
+    let ability = isSwing ? 'Melee' : (f[10] || ev);
+    if (isPet && mergePets) ability = 'Pet: ' + ability;
+    const hit = {name, amount, ability, crit: f[end - 4] === '1', isPet};
+
+    if (current) { addDamage(current, hit); addDamage(bosses, hit); }
+    else {
+      if (!pull || ts - pull.lastEvent > gapMs) { closePull(); pull = Object.assign(newBucket(), {n: ++pullN, start: ts, lastEvent: ts}); }
+      pull.lastEvent = ts;
+      addDamage(pull, hit); addDamage(trash, hit);
+    }
+    addDamage(overall, hit);
+  }
+
+  function onHeal(f, ts){
+    if (!isPlayer(f[1])) return;
+    const end = f.length;
+    const raw = num(f[amountIndex(layHeal, f, end, 4)]);
+    const over = Math.max(0, num(f[end - 3]));
+    const name = clean(f[2]);
+    vote(name, f[10]);
+    routeHeal({name, raw, over, eff: Math.max(0, raw - over), crit: f[end - 1] === '1', ability: f[10] || 'Unknown'}, ts);
+  }
+
+  function onAbsorb(f, ts){
+    // Two layouts: melee hit absorbed (caster at 9) or spell absorbed (caster at 12)
+    const c = /^[A-Za-z]+-/.test(f[9] || '') ? 9 : 12;
+    if (!isPlayer(f[c])) return;
+    const amount = num(f[c + 7]); if (amount <= 0) return;
+    routeHeal({name: clean(f[c + 1]), raw: amount, over: 0, eff: amount, crit: false, ability: f[c + 5] || 'Absorb'}, ts);
+  }
+
+  function line(raw){
+    const sep = raw.indexOf('  '); if (sep < 0) return;
+    lines++;
+    const body = raw.charCodeAt(raw.length - 1) === 13 ? raw.slice(sep + 2, -1) : raw.slice(sep + 2);
+    const c = body.indexOf(',');
+    const ev = c < 0 ? body : body.slice(0, c);
+    const isDmg = DAMAGE.has(ev), isHeal = HEAL.has(ev);
+    if (!isDmg && !isHeal && !OTHER.has(ev)) return;
+    const ts = parseTs(raw.slice(0, sep)); if (ts === null) return;
+    if (first === null) first = ts; last = ts;
+    const f = splitCsv(body);
+    if (isPlayer(f[1])) playerNames[f[1]] = clean(f[2]);
+
+    if (ev === 'ENCOUNTER_START') {
+      closePull();
+      if (current) closeEncounter(current.lastEvent, 'Incomplete');
+      current = Object.assign(newBucket(), {n: ++fightN, id: num(f[1]), boss: f[2] || 'Unknown', start: ts, lastEvent: ts});
+      return;
+    }
+    if (ev === 'ENCOUNTER_END') { if (current) closeEncounter(ts, num(f[5]) === 1 ? 'Kill' : 'Wipe'); return; }
+    if (ev === 'SPELL_SUMMON') {
+      if (f[5]) {
+        const owner = isPlayer(f[1]) ? clean(f[2]) : petOwners[f[1]];
+        if (owner) petOwners[f[5]] = owner;
+        if (isPlayer(f[1])) vote(clean(f[2]), f[10]);
+      }
+      return;
+    }
+    if (current) current.lastEvent = ts;
+    if (isDmg) onDamage(ev, f, ts);
+    else if (isHeal) onHeal(f, ts);
+    else if (ev === 'SPELL_ABSORBED') onAbsorb(f, ts);
+    else if (ev === 'SPELL_CAST_SUCCESS' && isPlayer(f[1])) vote(clean(f[2]), f[10]);
+  }
+
+  function finish(){
+    closePull();
+    if (current) closeEncounter(current.lastEvent, 'Incomplete');
+    const bossTime = encounters.reduce((s, e) => s + e.duration, 0);
+    const trashTime = pulls.reduce((s, p) => s + p.duration, 0);
+    const classes = {};
+    for (const n in classVotes) {
+      let best = null, bv = 0;
+      for (const c in classVotes[n]) if (classVotes[n][c] > bv) { bv = classVotes[n][c]; best = c; }
+      classes[n] = best;
+    }
+    return {
+      encounters, pulls, classes, lines, first, last,
+      segments: {
+        bosses: Object.assign(bosses, {time: bossTime}),
+        trash: Object.assign(trash, {time: trashTime}),
+        overall: Object.assign(overall, {time: bossTime + trashTime})
+      }
+    };
+  }
+  return {line, finish, get lines(){ return lines; }};
+}
+
+async function parseFile(file, opts){
+  const P = createParser(opts);
+  const reader = file.stream().pipeThrough(new TextDecoderStream()).getReader();
+  let buf = '', chars = 0, lastPost = 0;
+  for (;;) {
+    const {value, done} = await reader.read();
+    if (done) break;
+    buf += value; chars += value.length;
+    let start = 0, nl;
+    while ((nl = buf.indexOf('\n', start)) !== -1) { P.line(buf.slice(start, nl)); start = nl + 1; }
+    buf = buf.slice(start);
+    const now = Date.now();
+    if (now - lastPost > 120) { lastPost = now; self.postMessage({type:'progress', value: Math.min(0.99, chars / file.size), lines: P.lines}); }
+  }
+  if (buf) P.line(buf);
+  return P.finish();
+}
+
+if (typeof self !== 'undefined' && typeof document === 'undefined') {
+  self.onmessage = async e => {
+    try { self.postMessage({type:'done', result: await parseFile(e.data.file, e.data.opts)}); }
+    catch (err) { self.postMessage({type:'error', message: String((err && err.message) || err)}); }
+  };
+}
+</script>
+
+<!-- ================= UI ================= -->
+<script>
+const $ = s => document.querySelector(s);
+const state = {data:null, metric:'damage', filter:'', open:new Set(), parts:[], ctx:null, key:null, fileName:''};
+const CLASS_COLORS = {Warrior:'#C69B6D', Rogue:'#FFF468', Mage:'#3FC7EB', Hunter:'#AAD372', Warlock:'#8788EE', Priest:'#F0F0F0', Druid:'#FF7C0A', Paladin:'#F48CBA', Shaman:'#2F8CFF'};
+const SEG_NAMES = {bosses:'All Bosses', trash:'Trash', overall:'Overall'};
+
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt = n => Math.round(n).toLocaleString();
+const fmt1 = n => n.toLocaleString(undefined, {minimumFractionDigits:1, maximumFractionDigits:1});
+const pct = n => (n * 100).toFixed(1) + '%';
+function dur(s){ s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+  return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0'); }
+const clock = ms => new Date(ms).toISOString().slice(11, 19);
+const classColor = name => CLASS_COLORS[state.data.classes[name]] || '#9aa3b5';
+function link(parts, metric = state.metric){
+  return '#/' + parts.map(p => encodeURIComponent(p)).join('/') + (metric === 'healing' ? '?m=healing' : '');
+}
+function playerLink(name, metric){
+  const col = classColor(name);
+  return `<a href="${link(['player', name], metric)}" style="color:${col}"><span class="dot" style="background:${col}"></span>${esc(name)}</a>`;
+}
+
+/* ---------- ranking (cached per bucket) ---------- */
+const rankCache = new WeakMap();
+function ranked(bucket, time, metric){
+  let c = rankCache.get(bucket); if (!c) rankCache.set(bucket, c = {});
+  if (c[metric]) return c[metric];
+  const dmg = metric === 'damage';
+  const src = dmg ? bucket.damage : bucket.healing;
+  const rows = Object.entries(src).map(([name, x]) => ({name, x, amt: dmg ? x.total : x.eff}));
+  const total = rows.reduce((s, r) => s + r.amt, 0);
+  rows.forEach(r => { r.rate = time > 0 ? r.amt / time : 0; r.share = total ? r.amt / total : 0; });
+  const list = rows.filter(r => r.rate >= 1).sort((a, b) => b.rate - a.rate);
+  list.forEach((r, i) => r.rank = i + 1);
+  return c[metric] = {rows: list, total};
+}
+
+/* ---------- loading ---------- */
+function startParse(file){
+  if (!file) return;
+  $('#error').textContent = '';
+  $('#progress').classList.add('on');
+  $('#pbar').style.width = '0%';
+  $('#ptext').textContent = 'Reading ' + file.name + '\u2026';
+  document.body.classList.remove('loaded');
+  const opts = {mergePets: $('#optPets').checked, gapMs: (Number($('#optGap').value) || 10) * 1000};
+  const src = document.getElementById('worker-src').textContent;
+  const w = new Worker(URL.createObjectURL(new Blob([src], {type:'text/javascript'})));
+  w.onmessage = e => {
+    const m = e.data;
+    if (m.type === 'progress') {
+      $('#pbar').style.width = (m.value * 100).toFixed(1) + '%';
+      $('#ptext').textContent = `Reading ${file.name}\u2026 ${(m.value * 100).toFixed(0)}% \u00b7 ${m.lines.toLocaleString()} lines`;
+    } else if (m.type === 'done') {
+      w.terminate();
+      $('#progress').classList.remove('on');
+      if (!m.result.encounters.length && !m.result.pulls.length) {
+        $('#error').textContent = "No combat found in that file. Make sure it's a WoWCombatLog.txt.";
+        return;
+      }
+      state.data = m.result; state.fileName = file.name; state.key = null;
+      $('#fileChip').textContent = `${file.name} \u00b7 ${m.result.lines.toLocaleString()} lines`;
+      document.body.classList.add('loaded');
+      if (location.hash.length > 2) render(); else location.hash = '#/overview';
+    } else {
+      w.terminate();
+      $('#progress').classList.remove('on');
+      $('#error').textContent = 'Could not read the log: ' + m.message;
+    }
+  };
+  w.postMessage({file, opts});
+}
+
+/* ---------- routing ---------- */
+function parseHash(){
+  const h = location.hash.replace(/^#\/?/, '');
+  const [path, q = ''] = h.split('?');
+  state.metric = new URLSearchParams(q).get('m') === 'healing' ? 'healing' : 'damage';
+  return path.split('/').filter(Boolean).map(p => { try { return decodeURIComponent(p); } catch { return p; } });
+}
+
+function render(){
+  if (!state.data) return;
+  const parts = parseHash();
+  if (!parts.length) parts.push('overview');
+  state.parts = parts;
+  const key = parts.join('/');
+  if (key !== state.key) { state.key = key; state.open.clear(); window.scrollTo(0, 0); }
+  renderSidebar(parts);
+  document.body.classList.remove('nav-open');
+
+  const [kind, arg] = parts;
+  const ctx = ['seg', 'fight', 'pull'].includes(kind) ? rankingCtx(kind, arg) : null;
+  state.ctx = ctx;
+  $('#toolbar').hidden = !ctx;
+  if (ctx) {
+    $('#head').innerHTML = headHtml(ctx);
+    document.querySelectorAll('.segbtns button').forEach(b => b.classList.toggle('on', b.dataset.metric === state.metric));
+    renderRanking();
+  } else {
+    let v;
+    if (kind === 'pulls') v = viewPulls();
+    else if (kind === 'player') v = viewPlayer(arg);
+    else v = viewOverview();
+    $('#head').innerHTML = v.head;
+    $('#content').innerHTML = v.body;
+  }
+}
+
+function renderSidebar(parts){
+  const d = state.data;
+  let cur = parts.join('/');
+  if (parts[0] === 'pull') cur = 'pulls';
+  const item = (p, inner) => `<a class="nav${cur === p.join('/') ? ' active' : ''}" href="${link(p)}">${inner}</a>`;
+  let h = `<div class="navlabel">Summary</div>`;
+  h += item(['overview'], '<span class="grow">Overview</span>');
+  h += item(['seg', 'bosses'], `<span class="grow">All Bosses</span><span class="count">${d.encounters.length}</span>`);
+  h += item(['seg', 'trash'], `<span class="grow">Trash</span><span class="count">${d.pulls.length}</span>`);
+  h += item(['seg', 'overall'], '<span class="grow">Overall</span>');
+  h += `<div class="navlabel">Boss fights</div>`;
+  if (!d.encounters.length) h += `<div class="nav muted">No boss fights in log</div>`;
+  d.encounters.forEach(e => {
+    h += item(['fight', String(e.n)], `<span class="nb">${e.n}</span><span class="grow">${esc(e.boss)}</span><span class="tag ${e.result}">${e.result === 'Incomplete' ? '?' : e.result[0]}</span>`);
+  });
+  h += `<div class="navlabel">Trash</div>`;
+  h += item(['pulls'], `<span class="grow">Trash pulls</span><span class="count">${d.pulls.length}</span>`);
+  $('#sidebar').innerHTML = h;
+}
+
+/* ---------- ranking views ---------- */
+function rankingCtx(kind, arg){
+  const d = state.data;
+  if (kind === 'seg') {
+    const s = d.segments[arg]; if (!s) return null;
+    const sub = arg === 'bosses' ? `${d.encounters.length} boss fights \u00b7 ${dur(s.time)} of fight time`
+      : arg === 'trash' ? `${d.pulls.length} pulls \u00b7 ${dur(s.time)} in combat`
+      : `Bosses + trash \u00b7 ${dur(s.time)} in combat`;
+    const order = ['bosses', 'trash', 'overall'], i = order.indexOf(arg);
+    return {kicker:'Summary', title:SEG_NAMES[arg], sub, bucket:s, time:s.time,
+      prev: i > 0 ? ['seg', order[i - 1]] : null, next: i < 2 ? ['seg', order[i + 1]] : null};
+  }
+  if (kind === 'fight') {
+    const i = d.encounters.findIndex(e => e.n === Number(arg)); if (i < 0) return null;
+    const e = d.encounters[i];
+    return {kicker:`Boss fight ${e.n} of ${d.encounters.length}`, title:e.boss, badge:e.result,
+      sub:`${dur(e.duration)} \u00b7 pulled at ${clock(e.start)}`, bucket:e, time:e.duration,
+      prev: i > 0 ? ['fight', String(d.encounters[i - 1].n)] : null,
+      next: i < d.encounters.length - 1 ? ['fight', String(d.encounters[i + 1].n)] : null};
+  }
+  if (kind === 'pull') {
+    const i = d.pulls.findIndex(p => p.n === Number(arg)); if (i < 0) return null;
+    const p = d.pulls[i];
+    return {kicker:`Trash pull ${p.n} of ${d.pulls.length}`, title:`Trash pull #${p.n}`,
+      sub:`${dur(p.duration)} \u00b7 started ${clock(p.start)}`, bucket:p, time:p.duration,
+      prev: i > 0 ? ['pull', String(d.pulls[i - 1].n)] : null,
+      next: i < d.pulls.length - 1 ? ['pull', String(d.pulls[i + 1].n)] : null};
+  }
+  return null;
+}
+
+function headHtml(ctx){
+  const pn = `<div class="pn">
+    <a class="btn" href="${ctx.prev ? link(ctx.prev) : '#'}" aria-disabled="${!ctx.prev}">Prev</a>
+    <a class="btn" href="${ctx.next ? link(ctx.next) : '#'}" aria-disabled="${!ctx.next}">Next</a></div>`;
+  return `<div class="headrow"><div>
+    <div class="kicker">${esc(ctx.kicker)}</div>
+    <div class="titlerow"><h1>${esc(ctx.title)}</h1>${ctx.badge ? `<span class="tag ${ctx.badge}">${ctx.badge}</span>` : ''}</div>
+    <div class="sub">${ctx.sub}</div></div>${pn}</div>`;
+}
+
+function renderRanking(){
+  const ctx = state.ctx; if (!ctx) return;
+  const dmg = state.metric === 'damage';
+  const r = ranked(ctx.bucket, ctx.time, state.metric);
+  if (!r.rows.length) { $('#content').innerHTML = `<div class="empty">No ${dmg ? 'damage' : 'healing'} recorded here.</div>`; return; }
+  const top = r.rows[0].rate;
+  const f = state.filter.trim().toLowerCase();
+  const rows = r.rows.filter(x => !f || x.name.toLowerCase().includes(f));
+  let h = `<div class="summaryline">Raid total ${fmt(r.total)} ${dmg ? 'damage' : 'healing'} \u00b7 ${fmt1(r.total / ctx.time)} ${dmg ? 'DPS' : 'HPS'} \u00b7 ${r.rows.length} players \u00b7 click a row for abilities</div>`;
+  h += `<div class="panel scroll"><table><thead><tr>
+    <th class="c-rank">#</th><th>Player</th><th class="c-rate">${dmg ? 'DPS' : 'HPS'}</th>
+    <th class="num">${dmg ? 'Damage' : 'Effective'}</th><th class="num hide-sm">Share</th>
+    ${dmg ? '<th class="num hide-sm">Crit</th><th class="num hide-sm">Pet</th>' : '<th class="num hide-sm">Overheal</th><th class="num hide-sm">Crit</th>'}
+  </tr></thead><tbody>`;
+  rows.forEach(x => {
+    const open = state.open.has(x.name), col = classColor(x.name), s = x.x;
+    h += `<tr class="row${open ? ' open' : ''}" data-name="${esc(x.name)}">
+      <td class="c-rank">${x.rank}</td>
+      <td class="c-name"><span class="caret"></span>${playerLink(x.name)}</td>
+      <td class="c-rate"><div class="ratecell"><div class="track"><span style="width:${(x.rate / top * 100).toFixed(1)}%;background:${col}"></span></div><b>${fmt1(x.rate)}</b></div></td>
+      <td class="num">${fmt(x.amt)}</td>
+      <td class="num hide-sm">${pct(x.share)}</td>
+      ${dmg ? `<td class="num hide-sm">${pct(s.hits ? s.crits / s.hits : 0)}</td><td class="num hide-sm">${s.pet ? fmt(s.pet) : '\u2014'}</td>`
+            : `<td class="num hide-sm">${pct(s.raw ? s.over / s.raw : 0)}</td><td class="num hide-sm">${pct(s.hits ? s.crits / s.hits : 0)}</td>`}
+    </tr>`;
+    if (open) h += `<tr class="abil-row"><td colspan="7">${abilityTable(x.x, dmg, ctx.time, col)}</td></tr>`;
+  });
+  if (!rows.length) h += `<tr><td colspan="7" class="muted">No players match "${esc(state.filter)}".</td></tr>`;
+  $('#content').innerHTML = h + '</tbody></table></div>';
+}
+
+function abilityTable(stats, dmg, time, col){
+  const list = Object.entries(stats.abil).map(([n, a]) => ({n, a, amt: dmg ? a.t : a.e})).sort((p, q) => q.amt - p.amt);
+  const tot = (dmg ? stats.total : stats.eff) || 1;
+  const topAmt = list.length ? list[0].amt || 1 : 1;
+  let h = `<div class="abil"><table><thead><tr><th>Ability</th><th style="width:30%"></th><th class="num">${dmg ? 'Damage' : 'Effective'}</th><th class="num">%</th><th class="num">Per sec</th><th class="num">Hits</th><th class="num hide-sm">Crit</th>${dmg ? '' : '<th class="num hide-sm">Overheal</th>'}</tr></thead><tbody>`;
+  list.forEach(({n, a, amt}) => {
+    h += `<tr><td>${esc(n)}</td>
+      <td><div class="track"><span style="width:${(amt / topAmt * 100).toFixed(1)}%;background:${col}"></span></div></td>
+      <td class="num">${fmt(amt)}</td><td class="num">${pct(amt / tot)}</td><td class="num">${fmt1(amt / time)}</td>
+      <td class="num">${a.h.toLocaleString()}</td><td class="num hide-sm">${pct(a.h ? a.c / a.h : 0)}</td>
+      ${dmg ? '' : `<td class="num hide-sm">${pct(a.r ? a.o / a.r : 0)}</td>`}</tr>`;
+  });
+  return h + '</tbody></table></div>';
+}
+
+/* ---------- overview ---------- */
+function topList(bucket, time, metric, n = 5){
+  const r = ranked(bucket, time, metric).rows.slice(0, n);
+  if (!r.length) return '<div class="muted" style="font-size:13px">\u2014</div>';
+  return '<ol>' + r.map(x => `<li><span>${x.rank}. ${playerLink(x.name, metric)}</span><span class="num muted">${fmt1(x.rate)}</span></li>`).join('') + '</ol>';
+}
+
+function viewOverview(){
+  const d = state.data, S = d.segments;
+  const kills = d.encounters.filter(e => e.result === 'Kill').length;
+  const wipes = d.encounters.filter(e => e.result === 'Wipe').length;
+  const players = new Set(Object.keys(S.overall.damage).concat(Object.keys(S.overall.healing))).size;
+  const card = (k, v, s) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div>${s ? `<div class="s">${s}</div>` : ''}</div>`;
+  const head = `<div class="headrow"><div><div class="kicker">Overview</div>
+    <div class="titlerow"><h1>${esc(state.fileName)}</h1></div>
+    <div class="sub">${d.first ? clock(d.first) + ' \u2013 ' + clock(d.last) : ''} \u00b7 ${d.lines.toLocaleString()} log lines</div></div></div>`;
+
+  let body = `<div class="cards">
+    ${card('Boss fights', d.encounters.length, `${kills} kills \u00b7 ${wipes} wipes`)}
+    ${card('Boss time', dur(S.bosses.time))}
+    ${card('Trash time', dur(S.trash.time), `${d.pulls.length} pulls`)}
+    ${card('Raid damage', fmt(ranked(S.overall, S.overall.time, 'damage').total))}
+    ${card('Raid healing', fmt(ranked(S.overall, S.overall.time, 'healing').total))}
+    ${card('Players', players)}
+  </div>`;
+
+  body += `<div class="tops">` + ['bosses', 'trash', 'overall'].map(k => `<div class="card">
+    <h3>${SEG_NAMES[k]} <a href="${link(['seg', k], 'damage')}">Full rankings</a></h3>
+    <div class="mini"><div><div class="lbl">Top DPS</div>${topList(S[k], S[k].time, 'damage')}</div>
+    <div><div class="lbl">Top HPS</div>${topList(S[k], S[k].time, 'healing')}</div></div></div>`).join('') + `</div>`;
+
+  body += `<h2>Boss fights</h2>`;
+  if (!d.encounters.length) body += `<div class="empty">No encounter markers found. Everything was counted as trash.</div>`;
+  else {
+    body += `<div class="panel scroll"><table><thead><tr><th class="c-rank">#</th><th>Boss</th><th>Result</th><th class="num">Duration</th><th class="num hide-sm">Pulled</th><th>Top DPS</th><th class="hide-sm">Top healer</th></tr></thead><tbody>`;
+    d.encounters.forEach(e => {
+      const td = ranked(e, e.duration, 'damage').rows[0], th = ranked(e, e.duration, 'healing').rows[0];
+      body += `<tr data-href="${link(['fight', String(e.n)], 'damage')}"><td class="c-rank">${e.n}</td><td class="c-name"><a href="${link(['fight', String(e.n)], 'damage')}">${esc(e.boss)}</a></td>
+        <td><span class="tag ${e.result}">${e.result}</span></td><td class="num">${dur(e.duration)}</td><td class="num hide-sm muted">${clock(e.start)}</td>
+        <td>${td ? playerLink(td.name) + ` <span class="muted">${fmt1(td.rate)}</span>` : '\u2014'}</td>
+        <td class="hide-sm">${th ? playerLink(th.name, 'healing') + ` <span class="muted">${fmt1(th.rate)}</span>` : '\u2014'}</td></tr>`;
+    });
+    body += `</tbody></table></div>`;
+  }
+  return {head, body};
+}
+
+/* ---------- trash pulls ---------- */
+function viewPulls(){
+  const d = state.data;
+  const head = `<div class="headrow"><div><div class="kicker">Trash</div><div class="titlerow"><h1>Trash pulls</h1></div>
+    <div class="sub">${d.pulls.length} pulls \u00b7 ${dur(d.segments.trash.time)} in combat \u00b7 <a href="${link(['seg', 'trash'])}" style="color:var(--accent)">combined trash rankings</a></div></div></div>`;
+  if (!d.pulls.length) return {head, body:'<div class="empty">No trash combat in this log.</div>'};
+  let body = `<div class="panel scroll"><table><thead><tr><th class="c-rank">#</th><th class="num">Started</th><th class="num">Duration</th><th class="num">Damage</th><th class="num hide-sm">Healing</th><th>Top DPS</th><th class="hide-sm">Top healer</th></tr></thead><tbody>`;
+  d.pulls.forEach(p => {
+    const rd = ranked(p, p.duration, 'damage'), rh = ranked(p, p.duration, 'healing');
+    const td = rd.rows[0], th = rh.rows[0];
+    body += `<tr data-href="${link(['pull', String(p.n)], 'damage')}"><td class="c-rank">${p.n}</td><td class="num muted">${clock(p.start)}</td><td class="num">${dur(p.duration)}</td>
+      <td class="num">${fmt(rd.total)}</td><td class="num hide-sm">${fmt(rh.total)}</td>
+      <td>${td ? playerLink(td.name) + ` <span class="muted">${fmt1(td.rate)}</span>` : '\u2014'}</td>
+      <td class="hide-sm">${th ? playerLink(th.name, 'healing') + ` <span class="muted">${fmt1(th.rate)}</span>` : '\u2014'}</td></tr>`;
+  });
+  return {head, body: body + '</tbody></table></div>'};
+}
+
+/* ---------- player ---------- */
+function viewPlayer(name){
+  const d = state.data, col = classColor(name), cls = d.classes[name];
+  const head = `<div class="headrow"><div><div class="kicker">Player${cls ? ' \u00b7 ' + cls : ''}</div>
+    <div class="titlerow"><h1 style="color:${col}">${esc(name)}</h1></div>
+    <div class="sub">Performance across every segment and boss fight</div></div></div>`;
+  const cell = (bucket, time, metric) => {
+    const r = ranked(bucket, time, metric), x = r.rows.find(y => y.name === name);
+    return x ? `<td class="num">${fmt1(x.rate)}</td><td class="num muted">#${x.rank}/${r.rows.length}</td><td class="num hide-sm">${fmt(x.amt)}</td>`
+             : '<td class="num muted">\u2014</td><td></td><td class="hide-sm"></td>';
+  };
+  const rows = [];
+  ['bosses', 'trash', 'overall'].forEach(k => rows.push({label:`<strong>${SEG_NAMES[k]}</strong>`, href:['seg', k], b:d.segments[k], t:d.segments[k].time, res:''}));
+  d.encounters.forEach(e => rows.push({label:`<span class="muted">${e.n}.</span> ${esc(e.boss)}`, href:['fight', String(e.n)], b:e, t:e.duration, res:`<span class="tag ${e.result}">${e.result}</span>`}));
+  let body = `<div class="panel scroll"><table><thead><tr><th>Fight</th><th class="hide-sm">Result</th>
+    <th class="num">DPS</th><th class="num">Rank</th><th class="num hide-sm">Damage</th>
+    <th class="num">HPS</th><th class="num">Rank</th><th class="num hide-sm">Healing</th></tr></thead><tbody>`;
+  rows.forEach(r => {
+    body += `<tr data-href="${link(r.href, 'damage')}"><td class="c-name">${r.label}</td><td class="hide-sm">${r.res}</td>${cell(r.b, r.t, 'damage')}${cell(r.b, r.t, 'healing')}</tr>`;
+  });
+  body += '</tbody></table></div>';
+
+  const ov = d.segments.overall;
+  if (ov.damage[name]) body += `<h2>Damage abilities \u00b7 Overall</h2>${abilityTable(ov.damage[name], true, ov.time, col)}`;
+  if (ov.healing[name]) body += `<h2>Healing abilities \u00b7 Overall</h2>${abilityTable(ov.healing[name], false, ov.time, col)}`;
+  return {head, body};
+}
+
+/* ---------- CSV ---------- */
+function exportCsv(){
+  const ctx = state.ctx; if (!ctx) return;
+  const dmg = state.metric === 'damage';
+  const r = ranked(ctx.bucket, ctx.time, state.metric);
+  const q = v => /[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : v;
+  const lines = [[ 'Rank', 'Player', 'Class', dmg ? 'DPS' : 'HPS', dmg ? 'Damage' : 'Effective Healing', 'Share', 'Hits', 'Crits', dmg ? 'Pet Damage' : 'Overhealing' ].join(',')];
+  r.rows.forEach(x => lines.push([x.rank, q(x.name), state.data.classes[x.name] || '', x.rate.toFixed(1), Math.round(x.amt), (x.share * 100).toFixed(2) + '%', x.x.hits, x.x.crits, Math.round(dmg ? x.x.pet : x.x.over)].join(',')));
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([lines.join('\n')], {type:'text/csv'}));
+  a.download = `${ctx.title.replace(/[^\w]+/g, '-').toLowerCase()}-${state.metric}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+/* ---------- events ---------- */
+window.addEventListener('hashchange', render);
+$('#fileInput').addEventListener('change', e => startParse(e.target.files[0]));
+$('#fileInput2').addEventListener('change', e => { startParse(e.target.files[0]); e.target.value = ''; });
+$('#navToggle').addEventListener('click', () => document.body.classList.toggle('nav-open'));
+$('#filter').addEventListener('input', e => { state.filter = e.target.value; renderRanking(); });
+$('#exportBtn').addEventListener('click', exportCsv);
+document.querySelectorAll('.segbtns button').forEach(b => b.addEventListener('click', () => { location.hash = link(state.parts, b.dataset.metric); }));
+
+$('#content').addEventListener('click', e => {
+  if (e.target.closest('a')) return;
+  const row = e.target.closest('tr.row');
+  if (row) { const n = row.dataset.name; state.open.has(n) ? state.open.delete(n) : state.open.add(n); renderRanking(); return; }
+  const nav = e.target.closest('tr[data-href]');
+  if (nav) location.hash = nav.dataset.href;
+});
+
+document.addEventListener('keydown', e => {
+  if (!state.data || e.target.matches('input, textarea') || e.metaKey || e.ctrlKey || e.altKey) return;
+  const c = state.ctx;
+  if (e.key === '[' && c && c.prev) location.hash = link(c.prev);
+  else if (e.key === ']' && c && c.next) location.hash = link(c.next);
+  else if ((e.key === 'd' || e.key === 'D') && c) location.hash = link(state.parts, 'damage');
+  else if ((e.key === 'h' || e.key === 'H') && c) location.hash = link(state.parts, 'healing');
+  else if (e.key === '/' && c) { e.preventDefault(); $('#filter').focus(); }
+});
+
+let dragDepth = 0;
+window.addEventListener('dragenter', e => { e.preventDefault(); dragDepth++; document.body.classList.add('dragging'); });
+window.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });
+window.addEventListener('dragover', e => e.preventDefault());
+window.addEventListener('drop', e => {
+  e.preventDefault(); dragDepth = 0; document.body.classList.remove('dragging');
+  const f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) startParse(f);
+});
+</script>
+</body>
+</html>
