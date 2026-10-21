@@ -133,6 +133,25 @@ tr.open .caret{transform:rotate(90deg)}
 .dropzone-overlay{position:fixed;inset:0;z-index:100;display:none;place-items:center;background:rgba(13,15,20,.85);border:3px dashed var(--accent);font-size:20px;font-weight:600}
 body.dragging .dropzone-overlay{display:grid}
 
+/* Side-by-side meters & casts */
+.twocol{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(470px,100%),1fr));gap:16px;align-items:start}
+.meter h3{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin:0;padding:12px 14px;font-size:15px;border-bottom:1px solid var(--line)}
+.meter h3 small{font-weight:400;color:var(--muted);font-size:12.5px}
+.meter .c-rate{width:42%;min-width:120px}
+.meter .ratecell b{min-width:58px}
+.meter .abil-row>td{padding-left:12px}
+.meter .pad{padding:4px 12px 12px}
+.flat-empty{padding:28px;text-align:center;color:var(--muted)}
+.detail{font-size:12.5px;color:var(--muted);padding:8px 2px 2px}
+.abil td.aname{white-space:normal;min-width:120px}
+.aname .track{height:4px;margin-top:4px;max-width:220px;flex:none}
+.hitrow td{background:var(--accent-soft)}
+.chips-cell{white-space:normal}
+.chips{display:flex;flex-wrap:wrap;gap:5px}
+.chip{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:1px 7px;font-size:12px;color:#cfd3dd;white-space:nowrap}
+.chip b{color:var(--text);font-weight:600;margin-left:5px}
+.chip.hit{border-color:var(--accent);background:var(--accent-soft)}
+
 /* Mobile */
 @media (max-width:860px){
   .icon-btn{display:block}
@@ -156,7 +175,7 @@ body.dragging .dropzone-overlay{display:grid}
   <a class="brand" href="#/overview"><span class="brand-mark"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 17.5 3 6V3h3l11.5 11.5"/><path d="m13 19 6-6"/><path d="m16 16 4 4"/><path d="m19 21 2-2"/></svg></span>Raid Log Breakdown</a>
   <span class="filechip app-only" id="fileChip"></span>
   <span class="spacer"></span>
-  <label class="btn primary app-only">Open another log<input type="file" id="fileInput2" accept=".txt,.log" hidden></label>
+  <label class="btn primary app-only">Open log<input type="file" id="fileInput2" accept=".txt,.log" hidden></label>
 </header>
 
 <section class="landing">
@@ -193,12 +212,12 @@ body.dragging .dropzone-overlay{display:grid}
     <div id="head"></div>
     <div class="toolbar" id="toolbar" hidden>
       <div class="segbtns">
-        <button data-metric="damage">Damage</button>
-        <button data-metric="healing">Healing</button>
+        <button data-tab="meters">Damage &amp; Healing</button>
+        <button data-tab="casts">Casts</button>
       </div>
-      <input type="search" id="filter" placeholder="Filter players&#x2026;">
+      <input type="search" id="filter" placeholder="Filter players or spells">
       <button class="btn" id="exportBtn">Export CSV</button>
-      <span class="kbd"><b>[</b> <b>]</b> prev/next &#xb7; <b>D</b>/<b>H</b> damage/healing</span>
+      <span class="kbd"><b>[</b> <b>]</b> prev/next &middot; <b>1</b> <b>2</b> tabs &middot; <b>/</b> search</span>
     </div>
     <div id="content"></div>
   </main>
@@ -275,7 +294,7 @@ function amountIndex(L, f, end, offset){
   return end - offset - (hasBase ? 1 : 0);
 }
 
-function newBucket(){ return {damage:{}, healing:{}}; }
+function newBucket(){ return {damage:{}, healing:{}, casts:{}}; }
 
 function createParser(opts){
   const mergePets = opts.mergePets !== false;
@@ -315,6 +334,20 @@ function createParser(opts){
     p.eff += h.eff; p.raw += h.raw; p.over += h.over; p.hits++; if (h.crit) p.crits++;
     const a = p.abil[h.ability] || (p.abil[h.ability] = {e:0, r:0, o:0, h:0, c:0});
     a.e += h.eff; a.r += h.raw; a.o += h.over; a.h++; if (h.crit) a.c++;
+  }
+  function addCast(b, name, spell){
+    const p = b.casts[name] || (b.casts[name] = {total:0, spells:{}});
+    p.total++; p.spells[spell] = (p.spells[spell] || 0) + 1;
+  }
+  function onCast(f, ts){
+    const name = clean(f[2]), spell = f[10] || 'Unknown';
+    vote(name, spell);
+    if (current) { addCast(current, name, spell); addCast(bosses, name, spell); }
+    else {
+      if (pull && ts - pull.lastEvent <= gapMs) addCast(pull, name, spell);
+      addCast(trash, name, spell);
+    }
+    addCast(overall, name, spell);
   }
   function routeHeal(h, ts){
     if (current) { addHeal(current, h); addHeal(bosses, h); addHeal(overall, h); }
@@ -407,7 +440,7 @@ function createParser(opts){
     if (isDmg) onDamage(ev, f, ts);
     else if (isHeal) onHeal(f, ts);
     else if (ev === 'SPELL_ABSORBED') onAbsorb(f, ts);
-    else if (ev === 'SPELL_CAST_SUCCESS' && isPlayer(f[1])) vote(clean(f[2]), f[10]);
+    else if (ev === 'SPELL_CAST_SUCCESS' && isPlayer(f[1])) onCast(f, ts);
   }
 
   function finish(){
@@ -462,9 +495,11 @@ if (typeof self !== 'undefined' && typeof document === 'undefined') {
 <!-- ================= UI ================= -->
 <script>
 const $ = s => document.querySelector(s);
-const state = {data:null, metric:'damage', filter:'', open:new Set(), parts:[], ctx:null, key:null, fileName:''};
+const state = {data:null, tab:'meters', filter:'', open:new Set(), parts:[], ctx:null, key:null, fileName:''};
 const CLASS_COLORS = {Warrior:'#C69B6D', Rogue:'#FFF468', Mage:'#3FC7EB', Hunter:'#AAD372', Warlock:'#8788EE', Priest:'#F0F0F0', Druid:'#FF7C0A', Paladin:'#F48CBA', Shaman:'#2F8CFF'};
 const SEG_NAMES = {bosses:'All Bosses', trash:'Trash', overall:'Overall'};
+const DOT = ' &middot; ';
+const DASH = '&mdash;';
 
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt = n => Math.round(n).toLocaleString();
@@ -474,18 +509,20 @@ function dur(s){ s = Math.round(s); const h = Math.floor(s / 3600), m = Math.flo
   return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0'); }
 const clock = ms => new Date(ms).toISOString().slice(11, 19);
 const classColor = name => CLASS_COLORS[state.data.classes[name]] || '#9aa3b5';
-function link(parts, metric = state.metric){
-  return '#/' + parts.map(p => encodeURIComponent(p)).join('/') + (metric === 'healing' ? '?m=healing' : '');
+const filterText = () => state.filter.trim().toLowerCase();
+function link(parts, tab = state.tab){
+  return '#/' + parts.map(p => encodeURIComponent(p)).join('/') + (tab === 'casts' ? '?t=casts' : '');
 }
-function playerLink(name, metric){
+function playerLink(name){
   const col = classColor(name);
-  return `<a href="${link(['player', name], metric)}" style="color:${col}"><span class="dot" style="background:${col}"></span>${esc(name)}</a>`;
+  return `<a href="${link(['player', name], 'meters')}" style="color:${col}"><span class="dot" style="background:${col}"></span>${esc(name)}</a>`;
 }
 
 /* ---------- ranking (cached per bucket) ---------- */
 const rankCache = new WeakMap();
+function cacheFor(bucket){ let c = rankCache.get(bucket); if (!c) rankCache.set(bucket, c = {}); return c; }
 function ranked(bucket, time, metric){
-  let c = rankCache.get(bucket); if (!c) rankCache.set(bucket, c = {});
+  const c = cacheFor(bucket);
   if (c[metric]) return c[metric];
   const dmg = metric === 'damage';
   const src = dmg ? bucket.damage : bucket.healing;
@@ -495,6 +532,20 @@ function ranked(bucket, time, metric){
   const list = rows.filter(r => r.rate >= 1).sort((a, b) => b.rate - a.rate);
   list.forEach((r, i) => r.rank = i + 1);
   return c[metric] = {rows: list, total};
+}
+function castRanked(bucket){
+  const c = cacheFor(bucket);
+  if (c.casts) return c.casts;
+  const rows = Object.entries(bucket.casts || {}).map(([name, x]) => ({name, total: x.total, spells: x.spells}))
+    .sort((a, b) => b.total - a.total);
+  rows.forEach((r, i) => r.rank = i + 1);
+  return c.casts = {rows, total: rows.reduce((s, r) => s + r.total, 0)};
+}
+// A player matches the filter by name, or by any ability/spell name.
+function matches(name, abilNames){
+  const f = filterText();
+  if (!f || name.toLowerCase().includes(f)) return true;
+  return abilNames.some(a => a.toLowerCase().includes(f));
 }
 
 /* ---------- loading ---------- */
@@ -537,7 +588,7 @@ function startParse(file){
 function parseHash(){
   const h = location.hash.replace(/^#\/?/, '');
   const [path, q = ''] = h.split('?');
-  state.metric = new URLSearchParams(q).get('m') === 'healing' ? 'healing' : 'damage';
+  state.tab = new URLSearchParams(q).get('t') === 'casts' ? 'casts' : 'meters';
   return path.split('/').filter(Boolean).map(p => { try { return decodeURIComponent(p); } catch { return p; } });
 }
 
@@ -557,7 +608,7 @@ function render(){
   $('#toolbar').hidden = !ctx;
   if (ctx) {
     $('#head').innerHTML = headHtml(ctx);
-    document.querySelectorAll('.segbtns button').forEach(b => b.classList.toggle('on', b.dataset.metric === state.metric));
+    document.querySelectorAll('.segbtns button').forEach(b => b.classList.toggle('on', b.dataset.tab === state.tab));
     renderRanking();
   } else {
     let v;
@@ -573,9 +624,9 @@ function renderSidebar(parts){
   const d = state.data;
   let cur = parts.join('/');
   if (parts[0] === 'pull') cur = 'pulls';
-  const item = (p, inner) => `<a class="nav${cur === p.join('/') ? ' active' : ''}" href="${link(p)}">${inner}</a>`;
+  const item = (p, inner, tab) => `<a class="nav${cur === p.join('/') ? ' active' : ''}" href="${link(p, tab)}">${inner}</a>`;
   let h = `<div class="navlabel">Summary</div>`;
-  h += item(['overview'], '<span class="grow">Overview</span>');
+  h += item(['overview'], '<span class="grow">Overview</span>', 'meters');
   h += item(['seg', 'bosses'], `<span class="grow">All Bosses</span><span class="count">${d.encounters.length}</span>`);
   h += item(['seg', 'trash'], `<span class="grow">Trash</span><span class="count">${d.pulls.length}</span>`);
   h += item(['seg', 'overall'], '<span class="grow">Overall</span>');
@@ -585,18 +636,18 @@ function renderSidebar(parts){
     h += item(['fight', String(e.n)], `<span class="nb">${e.n}</span><span class="grow">${esc(e.boss)}</span><span class="tag ${e.result}">${e.result === 'Incomplete' ? '?' : e.result[0]}</span>`);
   });
   h += `<div class="navlabel">Trash</div>`;
-  h += item(['pulls'], `<span class="grow">Trash pulls</span><span class="count">${d.pulls.length}</span>`);
+  h += item(['pulls'], `<span class="grow">Trash pulls</span><span class="count">${d.pulls.length}</span>`, 'meters');
   $('#sidebar').innerHTML = h;
 }
 
-/* ---------- ranking views ---------- */
+/* ---------- fight / segment / pull views ---------- */
 function rankingCtx(kind, arg){
   const d = state.data;
   if (kind === 'seg') {
     const s = d.segments[arg]; if (!s) return null;
-    const sub = arg === 'bosses' ? `${d.encounters.length} boss fights \u00b7 ${dur(s.time)} of fight time`
-      : arg === 'trash' ? `${d.pulls.length} pulls \u00b7 ${dur(s.time)} in combat`
-      : `Bosses + trash \u00b7 ${dur(s.time)} in combat`;
+    const sub = arg === 'bosses' ? `${d.encounters.length} boss fights${DOT}${dur(s.time)} of fight time`
+      : arg === 'trash' ? `${d.pulls.length} pulls${DOT}${dur(s.time)} in combat`
+      : `Bosses + trash${DOT}${dur(s.time)} in combat`;
     const order = ['bosses', 'trash', 'overall'], i = order.indexOf(arg);
     return {kicker:'Summary', title:SEG_NAMES[arg], sub, bucket:s, time:s.time,
       prev: i > 0 ? ['seg', order[i - 1]] : null, next: i < 2 ? ['seg', order[i + 1]] : null};
@@ -605,7 +656,7 @@ function rankingCtx(kind, arg){
     const i = d.encounters.findIndex(e => e.n === Number(arg)); if (i < 0) return null;
     const e = d.encounters[i];
     return {kicker:`Boss fight ${e.n} of ${d.encounters.length}`, title:e.boss, badge:e.result,
-      sub:`${dur(e.duration)} \u00b7 pulled at ${clock(e.start)}`, bucket:e, time:e.duration,
+      sub:`${dur(e.duration)}${DOT}pulled at ${clock(e.start)}`, bucket:e, time:e.duration,
       prev: i > 0 ? ['fight', String(d.encounters[i - 1].n)] : null,
       next: i < d.encounters.length - 1 ? ['fight', String(d.encounters[i + 1].n)] : null};
   }
@@ -613,7 +664,7 @@ function rankingCtx(kind, arg){
     const i = d.pulls.findIndex(p => p.n === Number(arg)); if (i < 0) return null;
     const p = d.pulls[i];
     return {kicker:`Trash pull ${p.n} of ${d.pulls.length}`, title:`Trash pull #${p.n}`,
-      sub:`${dur(p.duration)} \u00b7 started ${clock(p.start)}`, bucket:p, time:p.duration,
+      sub:`${dur(p.duration)}${DOT}started ${clock(p.start)}`, bucket:p, time:p.duration,
       prev: i > 0 ? ['pull', String(d.pulls[i - 1].n)] : null,
       next: i < d.pulls.length - 1 ? ['pull', String(d.pulls[i + 1].n)] : null};
   }
@@ -632,55 +683,106 @@ function headHtml(ctx){
 
 function renderRanking(){
   const ctx = state.ctx; if (!ctx) return;
-  const dmg = state.metric === 'damage';
-  const r = ranked(ctx.bucket, ctx.time, state.metric);
-  if (!r.rows.length) { $('#content').innerHTML = `<div class="empty">No ${dmg ? 'damage' : 'healing'} recorded here.</div>`; return; }
+  $('#content').innerHTML = state.tab === 'casts'
+    ? castsView(ctx)
+    : `<div class="twocol">${meterPanel(ctx, 'damage')}${meterPanel(ctx, 'healing')}</div>`;
+}
+
+function meterPanel(ctx, metric){
+  const dmg = metric === 'damage';
+  const label = dmg ? 'Damage' : 'Healing', unit = dmg ? 'DPS' : 'HPS';
+  const r = ranked(ctx.bucket, ctx.time, metric);
+  let h = `<section class="panel meter"><h3>${label}<small>${fmt(r.total)}${DOT}${fmt1(ctx.time ? r.total / ctx.time : 0)} ${unit}</small></h3>`;
+  if (!r.rows.length) return h + `<div class="flat-empty">No ${label.toLowerCase()} recorded.</div></section>`;
   const top = r.rows[0].rate;
-  const f = state.filter.trim().toLowerCase();
-  const rows = r.rows.filter(x => !f || x.name.toLowerCase().includes(f));
-  let h = `<div class="summaryline">Raid total ${fmt(r.total)} ${dmg ? 'damage' : 'healing'} \u00b7 ${fmt1(r.total / ctx.time)} ${dmg ? 'DPS' : 'HPS'} \u00b7 ${r.rows.length} players \u00b7 click a row for abilities</div>`;
-  h += `<div class="panel scroll"><table><thead><tr>
-    <th class="c-rank">#</th><th>Player</th><th class="c-rate">${dmg ? 'DPS' : 'HPS'}</th>
-    <th class="num">${dmg ? 'Damage' : 'Effective'}</th><th class="num hide-sm">Share</th>
-    ${dmg ? '<th class="num hide-sm">Crit</th><th class="num hide-sm">Pet</th>' : '<th class="num hide-sm">Overheal</th><th class="num hide-sm">Crit</th>'}
-  </tr></thead><tbody>`;
+  const rows = r.rows.filter(x => matches(x.name, Object.keys(x.x.abil)));
+  h += `<div class="scroll"><table><thead><tr><th class="c-rank">#</th><th>Player</th><th class="c-rate">${unit}</th><th class="num">${label}</th><th class="num hide-sm">%</th></tr></thead><tbody>`;
   rows.forEach(x => {
-    const open = state.open.has(x.name), col = classColor(x.name), s = x.x;
-    h += `<tr class="row${open ? ' open' : ''}" data-name="${esc(x.name)}">
+    const key = metric + ':' + x.name, open = state.open.has(key), col = classColor(x.name), s = x.x;
+    h += `<tr class="row${open ? ' open' : ''}" data-key="${esc(key)}">
       <td class="c-rank">${x.rank}</td>
       <td class="c-name"><span class="caret"></span>${playerLink(x.name)}</td>
       <td class="c-rate"><div class="ratecell"><div class="track"><span style="width:${(x.rate / top * 100).toFixed(1)}%;background:${col}"></span></div><b>${fmt1(x.rate)}</b></div></td>
       <td class="num">${fmt(x.amt)}</td>
-      <td class="num hide-sm">${pct(x.share)}</td>
-      ${dmg ? `<td class="num hide-sm">${pct(s.hits ? s.crits / s.hits : 0)}</td><td class="num hide-sm">${s.pet ? fmt(s.pet) : '\u2014'}</td>`
-            : `<td class="num hide-sm">${pct(s.raw ? s.over / s.raw : 0)}</td><td class="num hide-sm">${pct(s.hits ? s.crits / s.hits : 0)}</td>`}
-    </tr>`;
-    if (open) h += `<tr class="abil-row"><td colspan="7">${abilityTable(x.x, dmg, ctx.time, col)}</td></tr>`;
+      <td class="num hide-sm">${pct(x.share)}</td></tr>`;
+    if (open) {
+      const detail = dmg
+        ? `Crit ${pct(s.hits ? s.crits / s.hits : 0)}${DOT}${s.hits.toLocaleString()} hits${s.pet ? DOT + 'Pet ' + fmt(s.pet) : ''}`
+        : `Overheal ${pct(s.raw ? s.over / s.raw : 0)}${DOT}Crit ${pct(s.hits ? s.crits / s.hits : 0)}${DOT}${s.hits.toLocaleString()} heals`;
+      h += `<tr class="abil-row"><td colspan="5"><div class="detail">${detail}</div>${abilityTable(s, dmg, ctx.time, col)}</td></tr>`;
+    }
   });
-  if (!rows.length) h += `<tr><td colspan="7" class="muted">No players match "${esc(state.filter)}".</td></tr>`;
-  $('#content').innerHTML = h + '</tbody></table></div>';
+  if (!rows.length) h += `<tr><td colspan="5" class="muted">No players match "${esc(state.filter)}".</td></tr>`;
+  return h + '</tbody></table></div></section>';
 }
 
 function abilityTable(stats, dmg, time, col){
   const list = Object.entries(stats.abil).map(([n, a]) => ({n, a, amt: dmg ? a.t : a.e})).sort((p, q) => q.amt - p.amt);
   const tot = (dmg ? stats.total : stats.eff) || 1;
   const topAmt = list.length ? list[0].amt || 1 : 1;
-  let h = `<div class="abil"><table><thead><tr><th>Ability</th><th style="width:30%"></th><th class="num">${dmg ? 'Damage' : 'Effective'}</th><th class="num">%</th><th class="num">Per sec</th><th class="num">Hits</th><th class="num hide-sm">Crit</th>${dmg ? '' : '<th class="num hide-sm">Overheal</th>'}</tr></thead><tbody>`;
+  let h = `<div class="abil"><table><thead><tr><th>Ability</th><th class="num">${dmg ? 'Damage' : 'Effective'}</th><th class="num">%</th><th class="num hide-sm">Per sec</th><th class="num">Hits</th><th class="num">Crit</th>${dmg ? '' : '<th class="num">OH</th>'}</tr></thead><tbody>`;
   list.forEach(({n, a, amt}) => {
-    h += `<tr><td>${esc(n)}</td>
-      <td><div class="track"><span style="width:${(amt / topAmt * 100).toFixed(1)}%;background:${col}"></span></div></td>
-      <td class="num">${fmt(amt)}</td><td class="num">${pct(amt / tot)}</td><td class="num">${fmt1(amt / time)}</td>
-      <td class="num">${a.h.toLocaleString()}</td><td class="num hide-sm">${pct(a.h ? a.c / a.h : 0)}</td>
-      ${dmg ? '' : `<td class="num hide-sm">${pct(a.r ? a.o / a.r : 0)}</td>`}</tr>`;
+    h += `<tr><td class="aname">${esc(n)}<div class="track"><span style="width:${(amt / topAmt * 100).toFixed(1)}%;background:${col}"></span></div></td>
+      <td class="num">${fmt(amt)}</td><td class="num">${pct(amt / tot)}</td><td class="num hide-sm">${fmt1(time ? amt / time : 0)}</td>
+      <td class="num">${a.h.toLocaleString()}</td><td class="num">${pct(a.h ? a.c / a.h : 0)}</td>
+      ${dmg ? '' : `<td class="num">${pct(a.r ? a.o / a.r : 0)}</td>`}</tr>`;
   });
+  return h + '</tbody></table></div>';
+}
+
+/* ---------- casts ---------- */
+function spellTable(spells, total, minutes){
+  const list = Object.entries(spells).sort((a, b) => b[1] - a[1]);
+  const top = list.length ? list[0][1] : 1;
+  const f = filterText();
+  let h = `<div class="abil"><table><thead><tr><th>Spell</th><th class="num">Casts</th><th class="num">Per min</th><th class="num">% of casts</th></tr></thead><tbody>`;
+  list.forEach(([s, n]) => {
+    const hit = f && s.toLowerCase().includes(f);
+    h += `<tr${hit ? ' class="hitrow"' : ''}><td class="aname">${esc(s)}<div class="track"><span style="width:${(n / top * 100).toFixed(1)}%;background:var(--accent)"></span></div></td>
+      <td class="num">${n.toLocaleString()}</td><td class="num">${minutes > 0 ? (n / minutes).toFixed(1) : DASH}</td><td class="num">${pct(total ? n / total : 0)}</td></tr>`;
+  });
+  return h + '</tbody></table></div>';
+}
+
+function castsView(ctx){
+  const r = castRanked(ctx.bucket);
+  if (!r.rows.length) return `<div class="empty">No casts recorded here.</div>`;
+  const f = filterText();
+  const minutes = ctx.time / 60;
+  const rows = [];
+  r.rows.forEach(x => {
+    const nameHit = !f || x.name.toLowerCase().includes(f);
+    const spellHits = f ? Object.entries(x.spells).filter(([s]) => s.toLowerCase().includes(f)).sort((a, b) => b[1] - a[1]) : [];
+    if (nameHit || spellHits.length) rows.push({x, spellHits: nameHit ? null : spellHits});
+  });
+  const spellMode = rows.some(r => r.spellHits);
+  rows.forEach(r => r.matchCount = r.spellHits ? r.spellHits.reduce((s, [, n]) => s + n, 0) : 0);
+  if (spellMode) rows.sort((a, b) => b.matchCount - a.matchCount);
+
+  let h = `<div class="summaryline">${r.total.toLocaleString()} casts by ${r.rows.length} players${DOT}click a player to see every spell${DOT}search a spell name (e.g. "sunder") to count it across the raid</div>`;
+  h += `<div class="panel scroll"><table><thead><tr><th class="c-rank">#</th><th>Player</th><th class="num">Casts</th>${spellMode ? `<th class="num">"${esc(state.filter.trim())}"</th>` : ''}<th>${spellMode ? 'Matching spells' : 'Most cast'}</th></tr></thead><tbody>`;
+  rows.forEach(({x, spellHits, matchCount}, i) => {
+    const key = 'casts:' + x.name, open = state.open.has(key);
+    const chipList = spellHits || Object.entries(x.spells).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    const more = spellHits ? 0 : Object.keys(x.spells).length - chipList.length;
+    const chips = chipList.map(([s, n]) => `<span class="chip${spellHits ? ' hit' : ''}">${esc(s)}<b>${n}</b></span>`).join('') + (more > 0 ? `<span class="chip muted">+${more} more</span>` : '');
+    h += `<tr class="row${open ? ' open' : ''}" data-key="${esc(key)}">
+      <td class="c-rank">${spellMode ? i + 1 : x.rank}</td>
+      <td class="c-name"><span class="caret"></span>${playerLink(x.name)}</td>
+      <td class="num">${x.total.toLocaleString()}</td>
+      ${spellMode ? `<td class="num"><strong>${matchCount.toLocaleString()}</strong></td>` : ''}
+      <td class="chips-cell"><div class="chips">${chips}</div></td></tr>`;
+    if (open) h += `<tr class="abil-row"><td colspan="${spellMode ? 5 : 4}">${spellTable(x.spells, x.total, minutes)}</td></tr>`;
+  });
+  if (!rows.length) h += `<tr><td colspan="4" class="muted">No players or spells match "${esc(state.filter)}".</td></tr>`;
   return h + '</tbody></table></div>';
 }
 
 /* ---------- overview ---------- */
 function topList(bucket, time, metric, n = 5){
   const r = ranked(bucket, time, metric).rows.slice(0, n);
-  if (!r.length) return '<div class="muted" style="font-size:13px">\u2014</div>';
-  return '<ol>' + r.map(x => `<li><span>${x.rank}. ${playerLink(x.name, metric)}</span><span class="num muted">${fmt1(x.rate)}</span></li>`).join('') + '</ol>';
+  if (!r.length) return `<div class="muted" style="font-size:13px">${DASH}</div>`;
+  return '<ol>' + r.map(x => `<li><span>${x.rank}. ${playerLink(x.name)}</span><span class="num muted">${fmt1(x.rate)}</span></li>`).join('') + '</ol>';
 }
 
 function viewOverview(){
@@ -691,10 +793,10 @@ function viewOverview(){
   const card = (k, v, s) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div>${s ? `<div class="s">${s}</div>` : ''}</div>`;
   const head = `<div class="headrow"><div><div class="kicker">Overview</div>
     <div class="titlerow"><h1>${esc(state.fileName)}</h1></div>
-    <div class="sub">${d.first ? clock(d.first) + ' \u2013 ' + clock(d.last) : ''} \u00b7 ${d.lines.toLocaleString()} log lines</div></div></div>`;
+    <div class="sub">${d.first ? clock(d.first) + ' &ndash; ' + clock(d.last) + DOT : ''}${d.lines.toLocaleString()} log lines</div></div></div>`;
 
   let body = `<div class="cards">
-    ${card('Boss fights', d.encounters.length, `${kills} kills \u00b7 ${wipes} wipes`)}
+    ${card('Boss fights', d.encounters.length, `${kills} kills${DOT}${wipes} wipes`)}
     ${card('Boss time', dur(S.bosses.time))}
     ${card('Trash time', dur(S.trash.time), `${d.pulls.length} pulls`)}
     ${card('Raid damage', fmt(ranked(S.overall, S.overall.time, 'damage').total))}
@@ -703,7 +805,7 @@ function viewOverview(){
   </div>`;
 
   body += `<div class="tops">` + ['bosses', 'trash', 'overall'].map(k => `<div class="card">
-    <h3>${SEG_NAMES[k]} <a href="${link(['seg', k], 'damage')}">Full rankings</a></h3>
+    <h3>${SEG_NAMES[k]} <a href="${link(['seg', k], 'meters')}">Full rankings</a></h3>
     <div class="mini"><div><div class="lbl">Top DPS</div>${topList(S[k], S[k].time, 'damage')}</div>
     <div><div class="lbl">Top HPS</div>${topList(S[k], S[k].time, 'healing')}</div></div></div>`).join('') + `</div>`;
 
@@ -713,10 +815,11 @@ function viewOverview(){
     body += `<div class="panel scroll"><table><thead><tr><th class="c-rank">#</th><th>Boss</th><th>Result</th><th class="num">Duration</th><th class="num hide-sm">Pulled</th><th>Top DPS</th><th class="hide-sm">Top healer</th></tr></thead><tbody>`;
     d.encounters.forEach(e => {
       const td = ranked(e, e.duration, 'damage').rows[0], th = ranked(e, e.duration, 'healing').rows[0];
-      body += `<tr data-href="${link(['fight', String(e.n)], 'damage')}"><td class="c-rank">${e.n}</td><td class="c-name"><a href="${link(['fight', String(e.n)], 'damage')}">${esc(e.boss)}</a></td>
+      const href = link(['fight', String(e.n)], 'meters');
+      body += `<tr data-href="${href}"><td class="c-rank">${e.n}</td><td class="c-name"><a href="${href}">${esc(e.boss)}</a></td>
         <td><span class="tag ${e.result}">${e.result}</span></td><td class="num">${dur(e.duration)}</td><td class="num hide-sm muted">${clock(e.start)}</td>
-        <td>${td ? playerLink(td.name) + ` <span class="muted">${fmt1(td.rate)}</span>` : '\u2014'}</td>
-        <td class="hide-sm">${th ? playerLink(th.name, 'healing') + ` <span class="muted">${fmt1(th.rate)}</span>` : '\u2014'}</td></tr>`;
+        <td>${td ? playerLink(td.name) + ` <span class="muted">${fmt1(td.rate)}</span>` : DASH}</td>
+        <td class="hide-sm">${th ? playerLink(th.name) + ` <span class="muted">${fmt1(th.rate)}</span>` : DASH}</td></tr>`;
     });
     body += `</tbody></table></div>`;
   }
@@ -727,16 +830,16 @@ function viewOverview(){
 function viewPulls(){
   const d = state.data;
   const head = `<div class="headrow"><div><div class="kicker">Trash</div><div class="titlerow"><h1>Trash pulls</h1></div>
-    <div class="sub">${d.pulls.length} pulls \u00b7 ${dur(d.segments.trash.time)} in combat \u00b7 <a href="${link(['seg', 'trash'])}" style="color:var(--accent)">combined trash rankings</a></div></div></div>`;
+    <div class="sub">${d.pulls.length} pulls${DOT}${dur(d.segments.trash.time)} in combat${DOT}<a href="${link(['seg', 'trash'], 'meters')}" style="color:var(--accent)">combined trash rankings</a></div></div></div>`;
   if (!d.pulls.length) return {head, body:'<div class="empty">No trash combat in this log.</div>'};
   let body = `<div class="panel scroll"><table><thead><tr><th class="c-rank">#</th><th class="num">Started</th><th class="num">Duration</th><th class="num">Damage</th><th class="num hide-sm">Healing</th><th>Top DPS</th><th class="hide-sm">Top healer</th></tr></thead><tbody>`;
   d.pulls.forEach(p => {
     const rd = ranked(p, p.duration, 'damage'), rh = ranked(p, p.duration, 'healing');
     const td = rd.rows[0], th = rh.rows[0];
-    body += `<tr data-href="${link(['pull', String(p.n)], 'damage')}"><td class="c-rank">${p.n}</td><td class="num muted">${clock(p.start)}</td><td class="num">${dur(p.duration)}</td>
+    body += `<tr data-href="${link(['pull', String(p.n)], 'meters')}"><td class="c-rank">${p.n}</td><td class="num muted">${clock(p.start)}</td><td class="num">${dur(p.duration)}</td>
       <td class="num">${fmt(rd.total)}</td><td class="num hide-sm">${fmt(rh.total)}</td>
-      <td>${td ? playerLink(td.name) + ` <span class="muted">${fmt1(td.rate)}</span>` : '\u2014'}</td>
-      <td class="hide-sm">${th ? playerLink(th.name, 'healing') + ` <span class="muted">${fmt1(th.rate)}</span>` : '\u2014'}</td></tr>`;
+      <td>${td ? playerLink(td.name) + ` <span class="muted">${fmt1(td.rate)}</span>` : DASH}</td>
+      <td class="hide-sm">${th ? playerLink(th.name) + ` <span class="muted">${fmt1(th.rate)}</span>` : DASH}</td></tr>`;
   });
   return {head, body: body + '</tbody></table></div>'};
 }
@@ -744,42 +847,57 @@ function viewPulls(){
 /* ---------- player ---------- */
 function viewPlayer(name){
   const d = state.data, col = classColor(name), cls = d.classes[name];
-  const head = `<div class="headrow"><div><div class="kicker">Player${cls ? ' \u00b7 ' + cls : ''}</div>
+  const head = `<div class="headrow"><div><div class="kicker">Player${cls ? DOT + cls : ''}</div>
     <div class="titlerow"><h1 style="color:${col}">${esc(name)}</h1></div>
     <div class="sub">Performance across every segment and boss fight</div></div></div>`;
   const cell = (bucket, time, metric) => {
     const r = ranked(bucket, time, metric), x = r.rows.find(y => y.name === name);
     return x ? `<td class="num">${fmt1(x.rate)}</td><td class="num muted">#${x.rank}/${r.rows.length}</td><td class="num hide-sm">${fmt(x.amt)}</td>`
-             : '<td class="num muted">\u2014</td><td></td><td class="hide-sm"></td>';
+             : `<td class="num muted">${DASH}</td><td></td><td class="hide-sm"></td>`;
+  };
+  const castCell = bucket => {
+    const c = bucket.casts && bucket.casts[name];
+    return `<td class="num">${c ? c.total.toLocaleString() : DASH}</td>`;
   };
   const rows = [];
   ['bosses', 'trash', 'overall'].forEach(k => rows.push({label:`<strong>${SEG_NAMES[k]}</strong>`, href:['seg', k], b:d.segments[k], t:d.segments[k].time, res:''}));
   d.encounters.forEach(e => rows.push({label:`<span class="muted">${e.n}.</span> ${esc(e.boss)}`, href:['fight', String(e.n)], b:e, t:e.duration, res:`<span class="tag ${e.result}">${e.result}</span>`}));
   let body = `<div class="panel scroll"><table><thead><tr><th>Fight</th><th class="hide-sm">Result</th>
     <th class="num">DPS</th><th class="num">Rank</th><th class="num hide-sm">Damage</th>
-    <th class="num">HPS</th><th class="num">Rank</th><th class="num hide-sm">Healing</th></tr></thead><tbody>`;
+    <th class="num">HPS</th><th class="num">Rank</th><th class="num hide-sm">Healing</th><th class="num">Casts</th></tr></thead><tbody>`;
   rows.forEach(r => {
-    body += `<tr data-href="${link(r.href, 'damage')}"><td class="c-name">${r.label}</td><td class="hide-sm">${r.res}</td>${cell(r.b, r.t, 'damage')}${cell(r.b, r.t, 'healing')}</tr>`;
+    body += `<tr data-href="${link(r.href, 'meters')}"><td class="c-name">${r.label}</td><td class="hide-sm">${r.res}</td>${cell(r.b, r.t, 'damage')}${cell(r.b, r.t, 'healing')}${castCell(r.b)}</tr>`;
   });
   body += '</tbody></table></div>';
 
   const ov = d.segments.overall;
-  if (ov.damage[name]) body += `<h2>Damage abilities \u00b7 Overall</h2>${abilityTable(ov.damage[name], true, ov.time, col)}`;
-  if (ov.healing[name]) body += `<h2>Healing abilities \u00b7 Overall</h2>${abilityTable(ov.healing[name], false, ov.time, col)}`;
+  const cards = [];
+  if (ov.damage[name]) cards.push(`<section class="panel meter"><h3>Damage abilities<small>Overall</small></h3><div class="pad">${abilityTable(ov.damage[name], true, ov.time, col)}</div></section>`);
+  if (ov.healing[name]) cards.push(`<section class="panel meter"><h3>Healing abilities<small>Overall</small></h3><div class="pad">${abilityTable(ov.healing[name], false, ov.time, col)}</div></section>`);
+  if (ov.casts && ov.casts[name]) cards.push(`<section class="panel meter"><h3>Casts<small>${ov.casts[name].total.toLocaleString()} overall</small></h3><div class="pad">${spellTable(ov.casts[name].spells, ov.casts[name].total, ov.time / 60)}</div></section>`);
+  if (cards.length) body += `<div class="twocol" style="margin-top:18px">${cards.join('')}</div>`;
   return {head, body};
 }
 
 /* ---------- CSV ---------- */
 function exportCsv(){
   const ctx = state.ctx; if (!ctx) return;
-  const dmg = state.metric === 'damage';
-  const r = ranked(ctx.bucket, ctx.time, state.metric);
   const q = v => /[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : v;
-  const lines = [[ 'Rank', 'Player', 'Class', dmg ? 'DPS' : 'HPS', dmg ? 'Damage' : 'Effective Healing', 'Share', 'Hits', 'Crits', dmg ? 'Pet Damage' : 'Overhealing' ].join(',')];
-  r.rows.forEach(x => lines.push([x.rank, q(x.name), state.data.classes[x.name] || '', x.rate.toFixed(1), Math.round(x.amt), (x.share * 100).toFixed(2) + '%', x.x.hits, x.x.crits, Math.round(dmg ? x.x.pet : x.x.over)].join(',')));
+  const cls = n => state.data.classes[n] || '';
+  let lines;
+  if (state.tab === 'casts') {
+    lines = ['Player,Class,Spell,Casts'];
+    castRanked(ctx.bucket).rows.forEach(x => Object.entries(x.spells).sort((a, b) => b[1] - a[1])
+      .forEach(([s, n]) => lines.push([q(x.name), cls(x.name), q(s), n].join(','))));
+  } else {
+    lines = ['Type,Rank,Player,Class,Per Second,Amount,Share,Hits,Crits,Pet Damage / Overhealing'];
+    ['damage', 'healing'].forEach(m => ranked(ctx.bucket, ctx.time, m).rows.forEach(x => lines.push([
+      m === 'damage' ? 'Damage' : 'Healing', x.rank, q(x.name), cls(x.name), x.rate.toFixed(1), Math.round(x.amt),
+      (x.share * 100).toFixed(2) + '%', x.x.hits, x.x.crits, Math.round(m === 'damage' ? x.x.pet : x.x.over)].join(','))));
+  }
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([lines.join('\n')], {type:'text/csv'}));
-  a.download = `${ctx.title.replace(/[^\w]+/g, '-').toLowerCase()}-${state.metric}.csv`;
+  a.download = `${ctx.title.replace(/[^\w]+/g, '-').toLowerCase()}-${state.tab === 'casts' ? 'casts' : 'damage-healing'}.csv`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
@@ -791,12 +909,12 @@ $('#fileInput2').addEventListener('change', e => { startParse(e.target.files[0])
 $('#navToggle').addEventListener('click', () => document.body.classList.toggle('nav-open'));
 $('#filter').addEventListener('input', e => { state.filter = e.target.value; renderRanking(); });
 $('#exportBtn').addEventListener('click', exportCsv);
-document.querySelectorAll('.segbtns button').forEach(b => b.addEventListener('click', () => { location.hash = link(state.parts, b.dataset.metric); }));
+document.querySelectorAll('.segbtns button').forEach(b => b.addEventListener('click', () => { location.hash = link(state.parts, b.dataset.tab); }));
 
 $('#content').addEventListener('click', e => {
   if (e.target.closest('a')) return;
   const row = e.target.closest('tr.row');
-  if (row) { const n = row.dataset.name; state.open.has(n) ? state.open.delete(n) : state.open.add(n); renderRanking(); return; }
+  if (row) { const k = row.dataset.key; state.open.has(k) ? state.open.delete(k) : state.open.add(k); renderRanking(); return; }
   const nav = e.target.closest('tr[data-href]');
   if (nav) location.hash = nav.dataset.href;
 });
@@ -806,8 +924,8 @@ document.addEventListener('keydown', e => {
   const c = state.ctx;
   if (e.key === '[' && c && c.prev) location.hash = link(c.prev);
   else if (e.key === ']' && c && c.next) location.hash = link(c.next);
-  else if ((e.key === 'd' || e.key === 'D') && c) location.hash = link(state.parts, 'damage');
-  else if ((e.key === 'h' || e.key === 'H') && c) location.hash = link(state.parts, 'healing');
+  else if (e.key === '1' && c) location.hash = link(state.parts, 'meters');
+  else if (e.key === '2' && c) location.hash = link(state.parts, 'casts');
   else if (e.key === '/' && c) { e.preventDefault(); $('#filter').focus(); }
 });
 
