@@ -281,18 +281,10 @@ function parseTs(s){
   return Date.UTC(y, Number(m[1]) - 1, Number(m[2]), Number(m[4]), Number(m[5]), Number(m[6]), Number((m[7] + '00').slice(0, 3)));
 }
 
-// Some log versions add a "baseAmount" field after amount. Detect it from the data
-// instead of hardcoding: without it, the field before amount is the unit level (small number).
-function makeLayout(){ return {seen:0, votes:0, mode:null}; }
-function amountIndex(L, f, end, offset){
-  let hasBase;
-  if (L.mode === null) {
-    hasBase = num(f[end - offset - 1]) > 70;
-    L.seen++; if (hasBase) L.votes++;
-    if (L.seen >= 1000) L.mode = L.votes / L.seen > 0.15;
-  } else hasBase = L.mode;
-  return end - offset - (hasBase ? 1 : 0);
-}
+// Damage suffix (after the advanced-info block):
+//   amount, baseAmount, overkill, school, resisted, blocked, absorbed, critical, glancing, crushing[, ST|AOE]
+// With advanced logging off there is no info block and no baseAmount (9 fields).
+// Heal suffix: v22 = effective, amount, overheal, absorbed, critical; v9 = amount, effective, overheal, absorbed, critical.
 
 function newBucket(){ return {damage:{}, healing:{}, casts:{}}; }
 
@@ -301,8 +293,7 @@ function createParser(opts){
   const gapMs = opts.gapMs || 10000;
   const encounters = [], pulls = [];
   const bosses = newBucket(), trash = newBucket(), overall = newBucket();
-  const petOwners = {}, playerNames = {}, classVotes = {};
-  const layDmg = makeLayout(), layHeal = makeLayout();
+  const petOwners = {}, petOwnerGuid = {}, playerNames = {}, classVotes = {};
   let current = null, pull = null, fightN = 0, pullN = 0, lines = 0, first = null, last = null;
 
   function closeEncounter(end, result){
@@ -354,13 +345,17 @@ function createParser(opts){
     else if (pull && ts - pull.lastEvent <= gapMs) { addHeal(pull, h); addHeal(trash, h); addHeal(overall, h); }
     // heals outside combat (topping off between pulls) are ignored
   }
-  function ownerOf(guid, f, prefix){
-    let o = petOwners[guid];
-    if (!o) {
-      const og = f[prefix + 1]; // advanced logging: ownerGUID
-      if (isPlayer(og) && playerNames[og]) { o = playerNames[og]; petOwners[guid] = o; }
-    }
-    return o;
+  // On damage/heal lines the advanced block describes the TARGET, so its ownerGUID can't be used
+  // to credit the source. Owners are learned from SPELL_SUMMON and from lines whose advanced
+  // block describes the source itself (casts by pets/totems).
+  function learnOwner(f, prefix){
+    const src = f[1];
+    if (isPlayer(src) || f[prefix] !== src) return;
+    const og = f[prefix + 1];
+    if (isPlayer(og)) petOwnerGuid[src] = og;
+  }
+  function ownerName(guid){
+    return petOwners[guid] || (petOwnerGuid[guid] && playerNames[petOwnerGuid[guid]]) || null;
   }
 
   function onDamage(ev, f, ts){
@@ -368,18 +363,18 @@ function createParser(opts){
     const isSwing = ev === 'SWING_DAMAGE';
     const prefix = isSwing ? 9 : 12;
     let end = f.length; if (f[end - 1] === 'ST' || f[end - 1] === 'AOE') end--;
-    const amount = num(f[amountIndex(layDmg, f, end, 10)]);
+    const amount = num(f[end - prefix === 9 ? prefix : end - 10]);
     if (amount <= 0) return;
     let name = clean(f[2]), isPet = false;
     if (!isPlayer(f[1])) {
-      const owner = ownerOf(f[1], f, prefix);
+      const owner = ownerName(f[1]);
       if (!owner) return;
       isPet = true;
       name = mergePets ? owner : `${name} (${owner})`;
     } else if (!isSwing) vote(name, f[10]);
     let ability = isSwing ? 'Melee' : (f[10] || ev);
     if (isPet && mergePets) ability = 'Pet: ' + ability;
-    const hit = {name, amount, ability, crit: f[end - 4] === '1', isPet};
+    const hit = {name, amount, ability, crit: f[end - 3] === '1', isPet};
 
     if (current) { addDamage(current, hit); addDamage(bosses, hit); }
     else {
@@ -391,12 +386,13 @@ function createParser(opts){
   }
 
   function onHeal(f, ts){
-    if (!isPlayer(f[1])) return;
+    let name;
+    if (isPlayer(f[1])) { name = clean(f[2]); vote(name, f[10]); }
+    else { name = ownerName(f[1]); if (!name) return; } // e.g. Healing Stream Totem -> its shaman
     const end = f.length;
-    const raw = num(f[amountIndex(layHeal, f, end, 4)]);
-    const over = Math.max(0, num(f[end - 3]));
-    const name = clean(f[2]);
-    vote(name, f[10]);
+    // 5-field suffix: the raw amount is the larger of the first two (order differs by log version)
+    const raw = end - 12 === 4 ? num(f[end - 4]) : Math.max(num(f[end - 5]), num(f[end - 4]));
+    const over = Math.min(raw, Math.max(0, num(f[end - 3])));
     routeHeal({name, raw, over, eff: Math.max(0, raw - over), crit: f[end - 1] === '1', ability: f[10] || 'Unknown'}, ts);
   }
 
@@ -430,12 +426,13 @@ function createParser(opts){
     if (ev === 'ENCOUNTER_END') { if (current) closeEncounter(ts, num(f[5]) === 1 ? 'Kill' : 'Wipe'); return; }
     if (ev === 'SPELL_SUMMON') {
       if (f[5]) {
-        const owner = isPlayer(f[1]) ? clean(f[2]) : petOwners[f[1]];
+        const owner = isPlayer(f[1]) ? clean(f[2]) : ownerName(f[1]);
         if (owner) petOwners[f[5]] = owner;
         if (isPlayer(f[1])) vote(clean(f[2]), f[10]);
       }
       return;
     }
+    if (ev === 'SPELL_CAST_SUCCESS') learnOwner(f, 12);
     if (current) current.lastEvent = ts;
     if (isDmg) onDamage(ev, f, ts);
     else if (isHeal) onHeal(f, ts);
