@@ -288,8 +288,26 @@ function parseTs(s){
 
 function newBucket(){ return {damage:{}, healing:{}, casts:{}}; }
 
+// Encounters whose "boss" is several units. The fight starts when any of them is engaged.
+// Mage fire spells that can start or stack Ignite (sappers, dynamite, Searing Pain etc. cannot).
+const IGNITE_SPELLS = new Set(['Fireball', 'Scorch', 'Fire Blast', 'Pyroblast', 'Flamestrike', 'Blast Wave', 'Living Bomb', 'Frostfire Bolt', 'Balefire Bolt']);
+
+const BOSS_UNITS = {
+  'The Four Horsemen': ['Highlord Mograine', "Thane Korth'azz", 'Lady Blaumeux', 'Sir Zeliek'],
+  'Thaddius': ['Thaddius', 'Stalagg', 'Feugen'],
+  'Twin Emperors': ["Emperor Vek'lor", "Emperor Vek'nilash"],
+  'Silithid Royalty': ['Princess Yauj', 'Vem', 'Lord Kri'],
+  'The Bug Trio': ['Princess Yauj', 'Vem', 'Lord Kri'],
+  'Bug Trio': ['Princess Yauj', 'Vem', 'Lord Kri']
+};
+
 function createParser(opts){
   const mergePets = opts.mergePets !== false;
+  const splitIgnite = opts.splitIgnite !== false;
+  const includeOverkill = !!opts.includeOverkill;
+  const igniteOn = {}; // target GUID -> Set of mage names
+  const controlled = new Set([...(opts.controlled || []), ...IGNORED_NPCS]);
+  let pending = null; // encounter started but boss not engaged yet; its events wait in pending.buf
   const gapMs = opts.gapMs || 10000;
   const encounters = [], pulls = [];
   const bosses = newBucket(), trash = newBucket(), overall = newBucket();
@@ -333,6 +351,10 @@ function createParser(opts){
   function onCast(f, ts){
     const name = clean(f[2]), spell = f[10] || 'Unknown';
     vote(name, spell);
+    routeCast(name, spell, ts);
+  }
+  function routeCast(name, spell, ts){
+    if (pending) { pending.buf.push(() => routeCast(name, spell, ts)); return; }
     if (current) { addCast(current, name, spell); addCast(bosses, name, spell); }
     else {
       if (pull && ts - pull.lastEvent <= gapMs) addCast(pull, name, spell);
@@ -341,6 +363,7 @@ function createParser(opts){
     addCast(overall, name, spell);
   }
   function routeHeal(h, ts){
+    if (pending) { pending.buf.push(() => routeHeal(h, ts)); return; }
     if (current) { addHeal(current, h); addHeal(bosses, h); addHeal(overall, h); }
     else if (pull && ts - pull.lastEvent <= gapMs) { addHeal(pull, h); addHeal(trash, h); addHeal(overall, h); }
     // heals outside combat (topping off between pulls) are ignored
@@ -359,11 +382,18 @@ function createParser(opts){
   }
 
   function onDamage(ev, f, ts){
-    if (isPlayer(f[5])) return; // ignore damage to players (duels, mind control, self-damage)
+    const destFlags = parseInt(f[7], 16) || 0;
+    // Only hostile targets count. Players count only while mind-controlled (hostile). Anything a player
+    // controls (pets, totems, target dummies) never counts.
+    if (!(destFlags & 0x40) || (destFlags & 0x100 && !isPlayer(f[5]))) return;
+    if (controlled.has(npcId(f[5]))) return; // friendly NPC type (mind-controlled) or one Warcraft Logs ignores
     const isSwing = ev === 'SWING_DAMAGE';
     const prefix = isSwing ? 9 : 12;
     let end = f.length; if (f[end - 1] === 'ST' || f[end - 1] === 'AOE') end--;
-    const amount = num(f[end - prefix === 9 ? prefix : end - 10]);
+    const hasBase = end - prefix !== 9;
+    const ai = hasBase ? end - 10 : prefix;
+    let amount = num(f[ai]);
+    if (!includeOverkill) amount -= Math.max(0, num(f[ai + (hasBase ? 2 : 1)]));
     if (amount <= 0) return;
     let name = clean(f[2]), isPet = false;
     if (!isPlayer(f[1])) {
@@ -374,8 +404,23 @@ function createParser(opts){
     } else if (!isSwing) vote(name, f[10]);
     let ability = isSwing ? 'Melee' : (f[10] || ev);
     if (isPet && mergePets) ability = 'Pet: ' + ability;
-    const hit = {name, amount, ability, crit: f[end - 3] === '1', isPet};
+    const crit = f[end - 3] === '1';
+    // Every mage who lands a fire crit on a target becomes an Ignite contributor on it.
+    if (!isPet && crit && IGNITE_SPELLS.has(ability)) (igniteOn[f[5]] || (igniteOn[f[5]] = new Set())).add(name);
+    if (splitIgnite && ability === 'Ignite' && !isPet) {
+      // One Ignite per target in vanilla, and the log credits every tick to whoever started it.
+      // Like Warcraft Logs, split each tick equally between all mages who have fire-crit that target.
+      const mages = igniteOn[f[5]];
+      if (mages && mages.size) {
+        for (const m of mages) routeDamage({name: m, amount: amount / mages.size, ability, crit: false, isPet: false}, ts);
+        return;
+      }
+    }
+    routeDamage({name, amount, ability, crit, isPet}, ts);
+  }
 
+  function routeDamage(hit, ts){
+    if (pending) { pending.buf.push(() => routeDamage(hit, ts)); return; }
     if (current) { addDamage(current, hit); addDamage(bosses, hit); }
     else {
       if (!pull || ts - pull.lastEvent > gapMs) { closePull(); pull = Object.assign(newBucket(), {n: ++pullN, start: ts, lastEvent: ts}); }
@@ -410,6 +455,10 @@ function createParser(opts){
     const body = raw.charCodeAt(raw.length - 1) === 13 ? raw.slice(sep + 2, -1) : raw.slice(sep + 2);
     const c = body.indexOf(',');
     const ev = c < 0 ? body : body.slice(0, c);
+    if (pending && ev !== 'ENCOUNTER_END' && pending.units.some(u => body.indexOf(u) !== -1)) {
+      const ts = parseTs(raw.slice(0, sep));
+      if (ts !== null) engage(ts);
+    }
     const isDmg = DAMAGE.has(ev), isHeal = HEAL.has(ev);
     if (!isDmg && !isHeal && !OTHER.has(ev)) return;
     const ts = parseTs(raw.slice(0, sep)); if (ts === null) return;
@@ -418,12 +467,18 @@ function createParser(opts){
     if (isPlayer(f[1])) playerNames[f[1]] = clean(f[2]);
 
     if (ev === 'ENCOUNTER_START') {
-      closePull();
+      if (pending) startUnengaged();
       if (current) closeEncounter(current.lastEvent, 'Incomplete');
-      current = Object.assign(newBucket(), {n: ++fightN, id: num(f[1]), boss: f[2] || 'Unknown', start: ts, lastEvent: ts});
+      const boss = f[2] || 'Unknown';
+      const units = (BOSS_UNITS[boss] || [boss]).map(u => '"' + u + '"');
+      pending = {enc: Object.assign(newBucket(), {n: ++fightN, id: num(f[1]), boss, start: ts, lastEvent: ts}), units, buf: []};
       return;
     }
-    if (ev === 'ENCOUNTER_END') { if (current) closeEncounter(ts, num(f[5]) === 1 ? 'Kill' : 'Wipe'); return; }
+    if (ev === 'ENCOUNTER_END') {
+      if (pending) startUnengaged();
+      if (current) closeEncounter(ts, num(f[5]) === 1 ? 'Kill' : 'Wipe');
+      return;
+    }
     if (ev === 'SPELL_SUMMON') {
       if (f[5]) {
         const owner = isPlayer(f[1]) ? clean(f[2]) : ownerName(f[1]);
@@ -440,7 +495,25 @@ function createParser(opts){
     else if (ev === 'SPELL_CAST_SUCCESS' && isPlayer(f[1])) onCast(f, ts);
   }
 
+  // Boss engaged long after ENCOUNTER_START: the time before it was pre-pull (trash); the fight starts now.
+  // (Matches Warcraft Logs: a boss seen within 10s keeps ENCOUNTER_START, e.g. Patchwerk pre-pull or
+  // Kel'Thuzad's add phase start the fight at the boss's first appearance.)
+  function engage(ts){
+    if (ts - pending.enc.start <= 10000) { startUnengaged(); return; }
+    const p = pending; pending = null;
+    p.buf.forEach(fn => fn());
+    closePull();
+    current = Object.assign(p.enc, {start: ts, lastEvent: ts});
+  }
+  // Boss never showed up in the log: fall back to ENCOUNTER_START as the fight start.
+  function startUnengaged(){
+    const p = pending; pending = null;
+    closePull();
+    current = p.enc;
+    p.buf.forEach(fn => fn());
+  }
   function finish(){
+    if (pending) startUnengaged();
     closePull();
     if (current) closeEncounter(current.lastEvent, 'Incomplete');
     const bossTime = encounters.reduce((s, e) => s + e.duration, 0);
@@ -463,8 +536,33 @@ function createParser(opts){
   return {line, finish, get lines(){ return lines; }};
 }
 
+// NPC types that were ever player-controlled (mind control: Razuvious understudies, Faerlina worshippers).
+// Warcraft Logs treats every unit of that type as friendly and leaves damage done to them out.
+// It also ignores damage to these NPC IDs: Corpse Scarab (Anub'Rekhan).
+const IGNORED_NPCS = ['16698'];
+const npcId = guid => { const p = guid.split('-'); return p[0] === 'Creature' || p[0] === 'Vehicle' ? p[5] : null; };
+const MC_RE = /Creature-[0-9]+-[0-9]+-[0-9]+-[0-9]+-([0-9]+)-[0-9A-Fa-f]+,"[^"]*",0x([0-9a-fA-F]+),/g;
+function scanControlled(text, into){
+  if (text.indexOf(',0x1') === -1) return;
+  MC_RE.lastIndex = 0; let m;
+  while ((m = MC_RE.exec(text))) { const fl = parseInt(m[2], 16); if ((fl & 0x1100) === 0x1100) into.add(m[1]); }
+}
+
 async function parseFile(file, opts){
-  const P = createParser(opts);
+  // Pass 1: find mind-controlled NPCs (cheap text scan).
+  const controlled = new Set();
+  {
+    const rd = file.stream().pipeThrough(new TextDecoderStream()).getReader();
+    let chars = 0, lastPost = 0;
+    for (;;) {
+      const {value, done} = await rd.read(); if (done) break;
+      scanControlled(value, controlled); chars += value.length;
+      const now = Date.now();
+      if (now - lastPost > 120) { lastPost = now; self.postMessage({type:'progress', value: 0.2 * chars / file.size, lines: 0}); }
+    }
+  }
+  // Pass 2: parse.
+  const P = createParser(Object.assign({}, opts, {controlled}));
   const reader = file.stream().pipeThrough(new TextDecoderStream()).getReader();
   let buf = '', chars = 0, lastPost = 0;
   for (;;) {
@@ -475,7 +573,7 @@ async function parseFile(file, opts){
     while ((nl = buf.indexOf('\n', start)) !== -1) { P.line(buf.slice(start, nl)); start = nl + 1; }
     buf = buf.slice(start);
     const now = Date.now();
-    if (now - lastPost > 120) { lastPost = now; self.postMessage({type:'progress', value: Math.min(0.99, chars / file.size), lines: P.lines}); }
+    if (now - lastPost > 120) { lastPost = now; self.postMessage({type:'progress', value: Math.min(0.99, 0.2 + 0.8 * chars / file.size), lines: P.lines}); }
   }
   if (buf) P.line(buf);
   return P.finish();
